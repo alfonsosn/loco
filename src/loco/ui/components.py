@@ -1,4 +1,4 @@
-"""UI components for loco - panels, spinners, and tool output."""
+"""UI components for loco - minimal Claude Code-inspired output."""
 
 from contextlib import contextmanager
 from typing import Any, Generator
@@ -38,65 +38,82 @@ class Spinner:
             self._live.update(spinner)
 
 
-class ToolPanel:
-    """Panel for displaying tool calls and results."""
+class ToolDisplay:
+    """Minimal tool call/result display - Claude Code style."""
+
+    @staticmethod
+    def _format_primary_arg(name: str, arguments: dict[str, Any]) -> str:
+        """Get the most relevant argument to display inline."""
+        # Priority order for common tools
+        priority_keys = ["file_path", "path", "command", "pattern", "query"]
+        for key in priority_keys:
+            if key in arguments:
+                val = arguments[key]
+                if isinstance(val, str):
+                    # Truncate long values
+                    return val[:60] + "..." if len(val) > 60 else val
+        # Fall back to first string argument
+        for val in arguments.values():
+            if isinstance(val, str):
+                return val[:60] + "..." if len(val) > 60 else val
+        return ""
 
     @staticmethod
     def tool_call(name: str, arguments: dict[str, Any], console: Console) -> None:
-        """Display a tool call panel."""
-        # Format arguments
-        args_lines = []
-        for key, value in arguments.items():
-            if isinstance(value, str) and len(value) > 100:
-                # Truncate long strings
-                display_value = value[:100] + "..."
-            else:
-                display_value = repr(value)
-            args_lines.append(f"  [cyan]{key}[/cyan]: {display_value}")
-
-        content = "\n".join(args_lines) if args_lines else "[dim]No arguments[/dim]"
-
-        panel = Panel(
-            content,
-            title=f"[bold yellow]Tool:[/bold yellow] {name}",
-            border_style="yellow",
-            padding=(0, 1),
-        )
-        console.print(panel)
+        """Display a minimal tool call line."""
+        primary = ToolDisplay._format_primary_arg(name, arguments)
+        if primary:
+            console.print(f"[dim]●[/dim] [cyan]{name}[/cyan] [dim]{primary}[/dim]")
+        else:
+            console.print(f"[dim]●[/dim] [cyan]{name}[/cyan]")
 
     @staticmethod
     def tool_result(name: str, result: str, success: bool, console: Console) -> None:
-        """Display a tool result panel."""
-        # Truncate very long results
-        max_lines = 50
+        """Display tool result - minimal for success, visible for errors."""
+        if not success:
+            # Show errors prominently
+            console.print(f"  [red]✗[/red] [dim]{result[:200]}[/dim]")
+        elif result and len(result.strip()) > 0:
+            # For successful results, show a brief summary
+            lines = result.strip().split("\n")
+            if len(lines) == 1 and len(lines[0]) < 80:
+                # Short single-line result - show it
+                console.print(f"  [dim]→ {lines[0]}[/dim]")
+            elif len(lines) <= 5:
+                # Few lines - show them indented
+                for line in lines[:5]:
+                    truncated = line[:100] + "..." if len(line) > 100 else line
+                    console.print(f"  [dim]{truncated}[/dim]")
+            else:
+                # Many lines - just show count
+                console.print(f"  [dim]→ {len(lines)} lines[/dim]")
+
+    @staticmethod
+    def tool_result_expanded(name: str, result: str, success: bool, console: Console) -> None:
+        """Display full tool result (for explicit show)."""
+        max_lines = 30
         lines = result.split("\n")
+
         if len(lines) > max_lines:
-            truncated = "\n".join(lines[:max_lines])
-            truncated += f"\n[dim]... ({len(lines) - max_lines} more lines)[/dim]"
+            for line in lines[:max_lines]:
+                console.print(f"  [dim]{line}[/dim]")
+            console.print(f"  [dim]... ({len(lines) - max_lines} more lines)[/dim]")
         else:
-            truncated = result
-
-        style = "green" if success else "red"
-        title = f"[bold {style}]Result:[/bold {style}] {name}"
-
-        panel = Panel(
-            truncated,
-            title=title,
-            border_style=style,
-            padding=(0, 1),
-        )
-        console.print(panel)
+            for line in lines:
+                console.print(f"  [dim]{line}[/dim]")
 
     @staticmethod
     def error(message: str, console: Console) -> None:
-        """Display an error panel."""
-        panel = Panel(
-            message,
-            title="[bold red]Error[/bold red]",
-            border_style="red",
-            padding=(0, 1),
-        )
-        console.print(panel)
+        """Display an error message."""
+        console.print(f"[red]✗ Error:[/red] {message}")
+
+
+# Backwards compatibility alias
+class ToolPanel:
+    """Deprecated - use ToolDisplay instead."""
+    tool_call = ToolDisplay.tool_call
+    tool_result = ToolDisplay.tool_result
+    error = ToolDisplay.error
 
 
 class StreamingMarkdown:

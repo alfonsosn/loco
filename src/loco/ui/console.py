@@ -74,12 +74,13 @@ class Console:
         self.console.print(f"[dim]Model: {model}[/dim]")
 
     def print_welcome(self, model: str, cwd: str) -> None:
-        """Print welcome message."""
+        """Print welcome message - minimal Claude Code style."""
         self.console.print()
-        self.console.print("[bold cyan]loco[/bold cyan] - LLM Coding Assistant")
-        self.console.print(f"[dim]Model: {model}[/dim]")
-        self.console.print(f"[dim]Working directory: {cwd}[/dim]")
-        self.console.print("[dim]Type /help for commands, Ctrl+C to exit[/dim]")
+        self.console.print("[bold]loco[/bold] [dim]v0.1.0[/dim]")
+        self.console.print(f"[dim]cwd:[/dim] {cwd}")
+        self.console.print(f"[dim]model:[/dim] {model}")
+        self.console.print()
+        self.console.print("[dim]/help for commands · ctrl+c to exit[/dim]")
         self.console.print()
 
     def get_input(self, prompt: str = "> ") -> str | None:
