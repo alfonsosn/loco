@@ -20,6 +20,7 @@ from loco.tools import tool_registry
 from loco.ui.console import get_console
 from loco.history import save_conversation, load_conversation, list_sessions
 from loco.skills import skill_registry, get_skills_system_prompt_section, Skill
+from loco.hooks import HookConfig
 
 
 # Track current session ID for auto-save
@@ -254,6 +255,9 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
     # Get tools
     tools = tool_registry.get_openai_tools()
 
+    # Initialize hooks
+    hook_config = HookConfig.from_dict(config.hooks) if config.hooks else None
+
     # Main loop
     while True:
         try:
@@ -286,6 +290,7 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
                     tools=tools,
                     tool_executor=tool_executor,
                     console=rich_console,
+                    hook_config=hook_config,
                 )
             except KeyboardInterrupt:
                 console.print("\n[dim]Interrupted[/dim]")

@@ -257,13 +257,14 @@ def chat_turn(
     tools: list[dict[str, Any]] | None,
     tool_executor: Any,  # Callable[[ToolCall], str]
     console: Console,
+    hook_config: Any = None,  # HookConfig from hooks.py
 ) -> None:
     """Execute a single chat turn with potential tool calls.
 
     This handles:
     1. Adding user message
     2. Streaming LLM response
-    3. Executing any tool calls
+    3. Executing any tool calls (with PreToolUse/PostToolUse hooks)
     4. Continuing conversation if tools were called
     """
     from loco.ui.components import StreamingMarkdown, Spinner
@@ -304,14 +305,52 @@ def chat_turn(
 
         # Execute tool calls
         for tc in tool_calls:
-            ToolPanel.tool_call(tc.name, tc.arguments, console)
+            tool_input = tc.arguments
+
+            # Run PreToolUse hooks if configured
+            if hook_config:
+                from loco.hooks import HookEvent, check_pre_tool_hooks
+                pre_hooks = hook_config.get_hooks(HookEvent.PRE_TOOL_USE, tc.name)
+                if pre_hooks:
+                    allowed, reason, modified_input = check_pre_tool_hooks(
+                        hooks=pre_hooks,
+                        tool_name=tc.name,
+                        tool_input=tool_input,
+                    )
+                    if not allowed:
+                        # Hook denied the tool call
+                        ToolPanel.tool_call(tc.name, tool_input, console)
+                        result = f"[Hook blocked]: {reason or 'Denied by hook'}"
+                        ToolPanel.tool_result(tc.name, result, False, console)
+                        conversation.add_tool_result(tc.id, tc.name, result)
+                        continue
+                    if modified_input:
+                        tool_input = modified_input
+
+            ToolPanel.tool_call(tc.name, tool_input, console)
 
             try:
-                result = tool_executor(tc)
+                # Create a modified ToolCall with potentially updated arguments
+                modified_tc = ToolCall(id=tc.id, name=tc.name, arguments=tool_input)
+                result = tool_executor(modified_tc)
                 success = True
             except Exception as e:
                 result = f"Error: {e}"
                 success = False
+
+            # Run PostToolUse hooks if configured
+            if hook_config and success:
+                from loco.hooks import HookEvent, run_post_tool_hooks
+                post_hooks = hook_config.get_hooks(HookEvent.POST_TOOL_USE, tc.name)
+                if post_hooks:
+                    additional_context = run_post_tool_hooks(
+                        hooks=post_hooks,
+                        tool_name=tc.name,
+                        tool_input=tool_input,
+                        tool_output=result,
+                    )
+                    if additional_context:
+                        result = f"{result}\n\n{additional_context}"
 
             ToolPanel.tool_result(tc.name, result, success, console)
 

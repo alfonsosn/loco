@@ -8,6 +8,7 @@ A Claude Code-inspired CLI for any OpenAI-compatible LLM via LiteLLM.
 - **Streaming responses**: Real-time token streaming with markdown rendering
 - **Built-in tools**: Read, Write, Edit, Bash, Glob, Grep
 - **Skills system**: Reusable prompts that teach the LLM specific tasks
+- **Hooks**: Shell commands at lifecycle events (pre/post tool use)
 - **Session persistence**: Save and load conversations
 - **Secure**: No external server - direct API calls only, config file permissions enforced
 - **Model aliases**: Define shortcuts for frequently used models
@@ -149,6 +150,77 @@ See `examples/skills/` for ready-to-use skills:
 - **debugger**: Helps debug issues systematically
 
 Copy them to `.loco/skills/` or `~/.config/loco/skills/` to use.
+
+## Hooks
+
+Hooks are shell commands that run at lifecycle events. They can validate, modify, or block tool calls.
+
+### Hook Events
+
+| Event | Description |
+|-------|-------------|
+| `PreToolUse` | Runs before a tool executes. Can approve/deny/modify. |
+| `PostToolUse` | Runs after a tool executes. Can add context. |
+
+### Configuration
+
+Add hooks to `~/.config/loco/config.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "hooks": [
+          { "type": "command", "command": "/path/to/validate.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write|edit",
+        "hooks": [
+          { "type": "command", "command": "/path/to/format.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Input/Output
+
+Hooks receive JSON on stdin:
+```json
+{
+  "hook_event": "PreToolUse",
+  "tool_name": "bash",
+  "tool_input": { "command": "ls -la" },
+  "cwd": "/current/dir"
+}
+```
+
+Hooks output JSON on stdout (optional):
+```json
+{
+  "decision": "deny",
+  "reason": "Blocked dangerous command",
+  "additional_context": "Extra info for the LLM"
+}
+```
+
+Exit codes:
+- `0`: Success (may include JSON output)
+- `2`: Blocking error (stderr shown)
+- Other: Non-blocking error
+
+### Example Hooks
+
+See `examples/hooks/` for ready-to-use hooks:
+- **block-dangerous-commands.sh**: Blocks `rm -rf /`, fork bombs, etc.
+- **format-on-write.sh**: Auto-formats files with black/prettier/gofmt
+- **lint-on-write.sh**: Runs linters and reports issues
 
 ## License
 
