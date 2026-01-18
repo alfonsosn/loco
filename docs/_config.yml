@@ -1,0 +1,7 @@
+title: loco
+description: Your AI coding assistant, any LLM, anywhere.
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+
+show_downloads: true
