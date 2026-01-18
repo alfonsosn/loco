@@ -9,6 +9,7 @@ from prompt_toolkit.styles import Style
 from rich.console import Console as RichConsole
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.markup import escape as escape_markup
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
@@ -56,8 +57,8 @@ class Console:
         self.console.print(syntax)
 
     def print_error(self, message: str) -> None:
-        """Print an error message."""
-        self.console.print(f"[bold red]Error:[/bold red] {message}")
+        """Print an error message (escapes Rich markup in message)."""
+        self.console.print(f"[bold red]Error:[/bold red] {escape_markup(str(message))}")
 
     def print_warning(self, message: str) -> None:
         """Print a warning message."""

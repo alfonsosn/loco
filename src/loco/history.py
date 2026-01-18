@@ -55,6 +55,10 @@ def save_conversation(
         "created_at": datetime.now().isoformat(),
         "messages": [msg.to_dict() for msg in conversation.messages],
     }
+    
+    # Add usage data if available
+    if conversation.usage:
+        session_data["usage"] = conversation.usage.to_dict()
 
     # Save to file
     session_file = history_dir / f"{session_id}.json"
@@ -94,6 +98,11 @@ def load_conversation(session_id: str) -> Conversation | None:
                 name=msg_data.get("name"),
             )
             conversation.messages.append(msg)
+        
+        # Load usage data if available
+        if "usage" in data:
+            from loco.usage import SessionUsage
+            conversation.usage = SessionUsage.from_dict(data["usage"])
 
         return conversation
 

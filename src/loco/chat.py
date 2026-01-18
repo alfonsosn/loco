@@ -69,6 +69,7 @@ class Conversation:
     messages: list[Message] = field(default_factory=list)
     model: str = ""
     config: Config | None = None
+    usage: Any = None  # SessionUsage from loco.usage
 
     def add_system_message(self, content: str) -> None:
         """Add or update the system message."""
@@ -160,6 +161,7 @@ def stream_response(
         "model": conversation.model,
         "messages": conversation.get_messages(),
         "stream": True,
+        "stream_options": {"include_usage": True},  # Request usage data in stream
     }
 
     # Add provider-specific config
@@ -196,6 +198,7 @@ def stream_response(
     # Track accumulated content and tool calls
     content_chunks: list[str] = []
     tool_calls_data: dict[int, dict[str, Any]] = {}
+    usage_data: dict[str, Any] | None = None
 
     for chunk in response:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -226,6 +229,10 @@ def stream_response(
                         tool_calls_data[idx]["function"]["name"] = tc.function.name
                     if tc.function.arguments:
                         tool_calls_data[idx]["function"]["arguments"] += tc.function.arguments
+        
+        # Capture usage data (typically in the last chunk)
+        if hasattr(chunk, 'usage') and chunk.usage:
+            usage_data = chunk.usage
 
     # After streaming, add the assistant message to conversation
     full_content = "".join(content_chunks) if content_chunks else None
@@ -236,6 +243,25 @@ def stream_response(
             content=full_content,
             tool_calls=tool_calls_list,
         )
+    
+    # Track usage stats if available
+    if usage_data:
+        from loco.usage import UsageStats, SessionUsage
+        
+        # Initialize session usage if needed
+        if conversation.usage is None:
+            conversation.usage = SessionUsage()
+        
+        # Add this call's usage
+        stat = UsageStats.from_response(
+            model=conversation.model,
+            usage_data=usage_data if isinstance(usage_data, dict) else {
+                "prompt_tokens": getattr(usage_data, "prompt_tokens", 0),
+                "completion_tokens": getattr(usage_data, "completion_tokens", 0),
+                "total_tokens": getattr(usage_data, "total_tokens", 0),
+            }
+        )
+        conversation.usage.add(stat)
 
     # Yield tool calls
     for tc_data in tool_calls_data.values():
@@ -301,6 +327,14 @@ def chat_turn(
 
         # If no tool calls, we're done
         if not tool_calls:
+            # Show usage info for this turn if available
+            if conversation.usage and conversation.usage.get_call_count() > 0:
+                last_stat = conversation.usage.stats[-1]
+                console.print(
+                    f"\n[dim]💭 {last_stat.total_tokens:,} tokens "
+                    f"(in: {last_stat.prompt_tokens:,}, out: {last_stat.completion_tokens:,}) "
+                    f"• ${last_stat.cost:.4f}[/dim]"
+                )
             break
 
         # Execute tool calls

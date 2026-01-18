@@ -58,6 +58,7 @@ def handle_slash_command(
   [cyan]/save[/cyan] [name]      Save current conversation
   [cyan]/load[/cyan] <id>        Load a saved conversation
   [cyan]/sessions[/cyan]         List saved sessions
+  [cyan]/stats[/cyan]            Show token usage and cost statistics
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
 
@@ -71,6 +72,7 @@ def handle_slash_command(
 
     elif cmd == "/clear":
         conversation.clear()
+        conversation.usage = None
         _current_session_id = None
         _active_skill = None
         console.print("[dim]Conversation cleared.[/dim]")
@@ -113,6 +115,8 @@ def handle_slash_command(
         conversation.messages = loaded.messages
         if loaded.model:
             conversation.model = loaded.model
+        if loaded.usage:
+            conversation.usage = loaded.usage
         _current_session_id = args
         console.print(f"[dim]Loaded session: {args} ({len(conversation.messages)} messages)[/dim]")
         return True
@@ -130,6 +134,31 @@ def handle_slash_command(
                 f"  [cyan]{s['session_id']}[/cyan]{name_str} - "
                 f"{s['message_count']} msgs, {s.get('model', 'unknown')}"
             )
+        return True
+    
+    elif cmd == "/stats":
+        if conversation.usage is None or conversation.usage.get_call_count() == 0:
+            console.print("[dim]No usage data yet. Make some API calls first![/dim]")
+            return True
+        
+        usage = conversation.usage
+        console.print("[bold]Session Statistics:[/bold]\n")
+        console.print(f"  Model: [cyan]{conversation.model}[/cyan]")
+        console.print(f"  API Calls: {usage.get_call_count()}")
+        console.print(f"  Total Tokens: {usage.get_total_tokens():,}")
+        console.print(f"    • Input: {usage.get_prompt_tokens():,} tokens")
+        console.print(f"    • Output: {usage.get_completion_tokens():,} tokens")
+        console.print(f"  Estimated Cost: [green]${usage.get_total_cost():.4f}[/green]")
+        
+        # Show per-call breakdown if there are multiple calls
+        if usage.get_call_count() > 1:
+            console.print("\n[dim]Recent calls:[/dim]")
+            for i, stat in enumerate(usage.stats[-5:], start=max(1, len(usage.stats) - 4)):
+                console.print(
+                    f"    {i}. {stat.total_tokens:,} tokens → ${stat.cost:.4f}"
+                )
+        
+        console.print("\n[dim]Note: Costs are estimates based on standard pricing[/dim]")
         return True
 
     elif cmd in ("/skill", "/skills"):
