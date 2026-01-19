@@ -22,6 +22,17 @@ from loco.history import save_conversation, load_conversation, list_sessions
 from loco.skills import skill_registry, get_skills_system_prompt_section, Skill
 from loco.hooks import HookConfig
 from loco.agents import agent_registry, run_agent
+from loco.planner import (
+    create_plan, save_plan, load_plan, list_plans,
+    format_plan_for_display, PLANNING_SYSTEM_PROMPT,
+    PlanStatus, StepStatus,
+)
+from loco.git import (
+    get_git_status, get_all_diff, get_staged_diff,
+    generate_commit_message_prompt, generate_pr_description_prompt,
+    get_commit_history, get_branch_diff, get_current_branch,
+    create_commit, stage_all_changes,
+)
 
 
 # Track current session ID for auto-save
@@ -59,6 +70,9 @@ def handle_slash_command(
   [cyan]/load[/cyan] <id>        Load a saved conversation
   [cyan]/sessions[/cyan]         List saved sessions
   [cyan]/stats[/cyan]            Show token usage and cost statistics
+  [cyan]/plan[/cyan] <task>      Create a step-by-step plan for a task
+  [cyan]/commit[/cyan]           Generate and create a smart commit message
+  [cyan]/pr[/cyan]               Generate a pull request description
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
 
@@ -159,6 +173,256 @@ def handle_slash_command(
                 )
         
         console.print("\n[dim]Note: Costs are estimates based on standard pricing[/dim]")
+        return True
+
+    elif cmd == "/plan":
+        if not args:
+            console.print("[yellow]Usage: /plan <task description>[/yellow]")
+            console.print("[dim]Example: /plan Add user authentication with JWT[/dim]")
+            return True
+
+        task = args
+        console.print(f"[bold]Creating plan for:[/bold] {task}\n")
+        console.print("[dim]Analyzing codebase and generating steps...[/dim]")
+
+        # Create a planning conversation
+        planning_conv = Conversation(
+            model=conversation.model,
+            config=conversation.config,
+        )
+        planning_conv.add_system_message(PLANNING_SYSTEM_PROMPT)
+        planning_conv.add_user_message(
+            f"Task: {task}\n\n"
+            f"Working directory: {os.getcwd()}\n\n"
+            "Analyze the codebase and create a detailed step-by-step plan for this task."
+        )
+
+        # Get plan from LLM
+        try:
+            plan_text = ""
+            with console.console.status("[dim]Planning...[/dim]"):
+                from loco.chat import stream_response
+                for item in stream_response(planning_conv, tools=tool_registry.get_openai_tools()):
+                    if isinstance(item, str):
+                        plan_text += item
+
+            # Parse steps from response (expecting numbered list)
+            steps = []
+            for line in plan_text.split("\n"):
+                line = line.strip()
+                # Match "1. Step description" or "1) Step description"
+                import re
+                match = re.match(r"^\d+[\.)]\s+(.+)$", line)
+                if match:
+                    steps.append(match.group(1))
+
+            if not steps:
+                console.print("[red]Failed to generate plan steps[/red]")
+                return True
+
+            # Create and save plan
+            plan = create_plan(task, steps)
+            save_plan(plan)
+
+            # Display plan
+            console.print("\n" + format_plan_for_display(plan))
+            console.print(f"\n[dim]Plan saved as: {plan.id}[/dim]")
+            console.print("\n[bold]Approve this plan?[/bold] [dim](yes/no)[/dim]")
+
+            # Get user approval
+            approval = console.get_input("> ")
+            if approval and approval.lower() in ["yes", "y"]:
+                plan.status = PlanStatus.APPROVED
+                plan.status = PlanStatus.EXECUTING
+                save_plan(plan)
+
+                console.print("[green]Plan approved! Executing steps...[/green]\n")
+
+                # Execute each step
+                for step in plan.steps:
+                    step.status = StepStatus.IN_PROGRESS
+                    save_plan(plan)
+
+                    console.print(f"[yellow]●[/yellow] Executing: {step.description}")
+
+                    # Add step to conversation and execute
+                    try:
+                        chat_turn(
+                            conversation=conversation,
+                            user_input=f"Execute this step: {step.description}",
+                            tools=tool_registry.get_openai_tools(),
+                            tool_executor=tool_executor,
+                            console=console.console,
+                            hook_config=HookConfig.from_dict(config.hooks) if config.hooks else None,
+                        )
+                        step.status = StepStatus.COMPLETED
+                        console.print(f"[green]✓[/green] Completed: {step.description}\n")
+                    except Exception as e:
+                        step.status = StepStatus.FAILED
+                        step.error = str(e)
+                        console.print(f"[red]✗[/red] Failed: {step.description}")
+                        console.print(f"[red]Error: {e}[/red]\n")
+
+                        console.print("[yellow]Continue with remaining steps?[/yellow] [dim](yes/no)[/dim]")
+                        continue_resp = console.get_input("> ")
+                        if not continue_resp or continue_resp.lower() not in ["yes", "y"]:
+                            break
+
+                    save_plan(plan)
+
+                plan.status = PlanStatus.COMPLETED
+                save_plan(plan)
+                console.print("[green]Plan execution completed![/green]")
+            else:
+                console.print("[dim]Plan cancelled.[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]Error creating plan: {e}[/red]")
+
+        return True
+
+    elif cmd == "/commit":
+        git_status = get_git_status()
+
+        if not git_status.is_repo:
+            console.print("[red]Not in a git repository[/red]")
+            return True
+
+        if not git_status.has_changes():
+            console.print("[dim]No changes to commit[/dim]")
+            return True
+
+        # Show current status
+        console.print(f"[bold]Current branch:[/bold] {git_status.branch}")
+        if git_status.staged_files:
+            console.print(f"[green]Staged files:[/green] {len(git_status.staged_files)}")
+        if git_status.unstaged_files:
+            console.print(f"[yellow]Unstaged files:[/yellow] {len(git_status.unstaged_files)}")
+
+        # Ask if we should stage all changes
+        if git_status.unstaged_files:
+            console.print("\n[yellow]Stage all changes?[/yellow] [dim](yes/no)[/dim]")
+            stage_response = console.get_input("> ")
+            if stage_response and stage_response.lower() in ["yes", "y"]:
+                stage_all_changes()
+                console.print("[dim]Staged all changes[/dim]")
+
+        # Get diff
+        diff = get_staged_diff() or get_all_diff()
+        if not diff:
+            console.print("[red]No diff found[/red]")
+            return True
+
+        # Generate commit message
+        console.print("\n[dim]Generating commit message...[/dim]")
+        prompt = generate_commit_message_prompt(diff)
+
+        # Create temporary conversation for commit message
+        commit_conv = Conversation(model=conversation.model, config=conversation.config)
+        commit_conv.add_user_message(prompt)
+
+        try:
+            commit_message = ""
+            with console.console.status("[dim]Thinking...[/dim]"):
+                from loco.chat import stream_response
+                for item in stream_response(commit_conv, tools=None):
+                    if isinstance(item, str):
+                        commit_message += item
+
+            commit_message = commit_message.strip()
+
+            # Show generated message
+            console.print("\n[bold]Generated commit message:[/bold]")
+            console.print(f"[cyan]{commit_message}[/cyan]")
+            console.print("\n[bold]Create this commit?[/bold] [dim](yes/no/edit)[/dim]")
+
+            response = console.get_input("> ")
+
+            if response and response.lower() == "edit":
+                console.print("\n[dim]Enter your commit message (press Ctrl+D when done):[/dim]")
+                edited_message = console.get_multiline_input("> ")
+                if edited_message:
+                    commit_message = edited_message.strip()
+                else:
+                    console.print("[dim]Commit cancelled[/dim]")
+                    return True
+            elif not response or response.lower() not in ["yes", "y"]:
+                console.print("[dim]Commit cancelled[/dim]")
+                return True
+
+            # Create commit
+            success, output = create_commit(commit_message)
+            if success:
+                console.print(f"[green]✓[/green] Commit created successfully")
+                console.print(f"[dim]{output}[/dim]")
+            else:
+                console.print(f"[red]Failed to create commit:[/red]")
+                console.print(output)
+
+        except Exception as e:
+            console.print(f"[red]Error generating commit message: {e}[/red]")
+
+        return True
+
+    elif cmd == "/pr":
+        git_status = get_git_status()
+
+        if not git_status.is_repo:
+            console.print("[red]Not in a git repository[/red]")
+            return True
+
+        branch = git_status.branch
+        if not branch:
+            console.print("[red]Not on a branch[/red]")
+            return True
+
+        if branch in ["main", "master"]:
+            console.print("[yellow]Warning: You're on the main/master branch[/yellow]")
+            console.print("[dim]Usually you'd create a PR from a feature branch[/dim]")
+
+        # Get base branch (default to main)
+        console.print("[bold]Base branch?[/bold] [dim](default: main)[/dim]")
+        base_branch = console.get_input("> ") or "main"
+
+        console.print(f"\n[dim]Generating PR description for {branch} → {base_branch}...[/dim]")
+
+        # Get commit history and diff
+        commits = get_commit_history(base_branch)
+        diff = get_branch_diff(base_branch)
+
+        if not commits and not diff:
+            console.print("[red]No changes found between branches[/red]")
+            return True
+
+        # Generate PR description
+        prompt = generate_pr_description_prompt(branch, base_branch, commits, diff or "")
+
+        pr_conv = Conversation(model=conversation.model, config=conversation.config)
+        pr_conv.add_user_message(prompt)
+
+        try:
+            pr_description = ""
+            with console.console.status("[dim]Thinking...[/dim]"):
+                from loco.chat import stream_response
+                for item in stream_response(pr_conv, tools=None):
+                    if isinstance(item, str):
+                        pr_description += item
+
+            # Display PR description
+            console.print("\n[bold]Generated PR Description:[/bold]\n")
+            console.print_markdown(pr_description)
+
+            # Save to file
+            pr_file = Path(".loco") / "PR_DESCRIPTION.md"
+            pr_file.parent.mkdir(exist_ok=True)
+            pr_file.write_text(pr_description)
+
+            console.print(f"\n[green]✓[/green] PR description saved to: [cyan]{pr_file}[/cyan]")
+            console.print("[dim]You can use this when creating your pull request[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]Error generating PR description: {e}[/red]")
+
         return True
 
     elif cmd in ("/skill", "/skills"):

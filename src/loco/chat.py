@@ -117,9 +117,25 @@ class Conversation:
 
 def get_default_system_prompt(cwd: str, skills_section: str = "") -> str:
     """Get the default system prompt for loco."""
+    # Get git status if in a repository
+    git_info = ""
+    try:
+        from loco.git import get_git_status
+        git_status = get_git_status()
+        if git_status.is_repo:
+            git_info = f"\nGit repository: Yes (branch: {git_status.branch})"
+            if git_status.staged_files:
+                git_info += f"\n  Staged files: {len(git_status.staged_files)}"
+            if git_status.unstaged_files:
+                git_info += f"\n  Unstaged files: {len(git_status.unstaged_files)}"
+            if git_status.ahead:
+                git_info += f"\n  Commits ahead: {git_status.ahead}"
+    except Exception:
+        pass
+
     base_prompt = f"""You are a helpful coding assistant running in a terminal. You help users with software engineering tasks.
 
-Current working directory: {cwd}
+Current working directory: {cwd}{git_info}
 
 You have access to tools for reading, writing, and editing files, as well as running bash commands.
 
