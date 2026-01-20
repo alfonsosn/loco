@@ -157,7 +157,10 @@ Skills are reusable prompts that teach the LLM specific tasks.
 ### Location
 
 - **Project:** `.loco/skills/skill-name/SKILL.md`
+- **Claude Desktop:** `.claude/skills/skill-name/SKILL.md` (compatible)
 - **User:** `~/.config/loco/skills/skill-name/SKILL.md`
+
+> **Note:** `.claude/` directories enable seamless integration with Claude Desktop. Use `.loco/` for project-specific overrides.
 
 ### Creating a Skill
 
@@ -283,7 +286,10 @@ Agents are subagents with isolated contexts and restricted tools. Use them for f
 ### Location
 
 - **Project:** `.loco/agents/agent-name.md`
+- **Claude Desktop:** `.claude/agents/agent-name.md` (compatible)
 - **User:** `~/.config/loco/agents/agent-name.md`
+
+> **Note:** `.claude/` directories enable seamless integration with Claude Desktop. Use `.loco/` for project-specific overrides.
 
 ### Creating an Agent
 

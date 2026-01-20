@@ -345,7 +345,7 @@ LoCo is smart about chaining tools:
 
 ### 6. Project-Specific Skills
 
-Create `.loco/skills/project-conventions.md`:
+Create `.loco/skills/project-conventions/SKILL.md` (or `.claude/skills/` for Claude Desktop compatibility):
 
 ```markdown
 ---

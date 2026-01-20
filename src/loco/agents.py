@@ -51,7 +51,11 @@ class AgentRegistry:
 
         Locations (in precedence order, later overrides earlier):
         1. User agents: ~/.config/loco/agents/
-        2. Project agents: .loco/agents/
+        2. Claude Desktop agents: .claude/agents/ (for compatibility)
+        3. Project agents: .loco/agents/ (highest priority)
+
+        Note: .claude/ support enables seamless integration with Claude Desktop
+        configurations. Both .claude/ and .loco/ can coexist in the same project.
         """
         self.agents.clear()
 
@@ -59,13 +63,16 @@ class AgentRegistry:
         user_agents_dir = get_config_dir() / "agents"
         self._load_agents_from_dir(user_agents_dir)
 
-        # Project agents (highest precedence)
-        if project_dir:
-            project_agents_dir = project_dir / ".loco" / "agents"
-            self._load_agents_from_dir(project_agents_dir)
-        else:
-            project_agents_dir = Path.cwd() / ".loco" / "agents"
-            self._load_agents_from_dir(project_agents_dir)
+        # Project directory to search
+        search_dir = project_dir if project_dir else Path.cwd()
+
+        # Claude Desktop agents (middle precedence)
+        claude_agents_dir = search_dir / ".claude" / "agents"
+        self._load_agents_from_dir(claude_agents_dir)
+
+        # Loco project agents (highest precedence)
+        loco_agents_dir = search_dir / ".loco" / "agents"
+        self._load_agents_from_dir(loco_agents_dir)
 
         self._discovered = True
 
