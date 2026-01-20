@@ -61,6 +61,7 @@ def handle_slash_command(
 
   [cyan]/help[/cyan]             Show this help message
   [cyan]/clear[/cyan]            Clear conversation history
+  [cyan]/compact[/cyan]          Summarize conversation to reduce token usage
   [cyan]/model[/cyan] [name]     Show or switch the current model
   [cyan]/skill[/cyan] [name]     Activate a skill or list available skills
   [cyan]/skills[/cyan]           List all available skills
@@ -91,6 +92,127 @@ def handle_slash_command(
         _current_session_id = None
         _active_skill = None
         console.print("[dim]Conversation cleared.[/dim]")
+        return True
+
+    elif cmd == "/compact":
+        from loco.usage import estimate_conversation_tokens
+        from loco.chat import stream_response
+
+        # Check if there's enough conversation to compact
+        non_system_messages = [m for m in conversation.messages if m.role != "system"]
+        if len(non_system_messages) < 4:
+            console.print("[yellow]Not enough conversation history to compact.[/yellow]")
+            console.print("[dim]Need at least 4 messages (2 exchanges). Use /clear to reset instead.[/dim]")
+            return True
+
+        # Show current state
+        current_tokens = estimate_conversation_tokens(conversation)
+        console.print(f"[bold]Compact Conversation[/bold]\n")
+        console.print(f"  Current messages: {len(non_system_messages)} messages")
+        console.print(f"  Estimated tokens: {current_tokens:,} tokens")
+        console.print()
+        console.print("[yellow]This will summarize the conversation to reduce token usage.[/yellow]")
+        console.print("[dim]The last 2 messages will be preserved for context.[/dim]")
+        console.print()
+        console.print("[bold]Continue?[/bold] [dim](yes/no)[/dim]")
+
+        response = console.get_input("> ")
+        if not response or response.lower() not in ["yes", "y"]:
+            console.print("[dim]Compaction cancelled.[/dim]")
+            return True
+
+        console.print()
+        console.print("[dim]Generating summary...[/dim]")
+
+        # Create a temporary conversation for compaction
+        from loco.chat import Conversation
+        compact_conv = Conversation(model=conversation.model, config=config)
+
+        # Build compaction prompt
+        messages_to_compact = non_system_messages[:-2] if len(non_system_messages) > 2 else non_system_messages
+
+        # Format conversation history
+        history = []
+        for msg in messages_to_compact:
+            role_label = msg.role.upper()
+            content = msg.content or ""
+
+            if msg.tool_calls:
+                import json
+                content += f"\n[Used tools: {json.dumps(msg.tool_calls)}]"
+
+            history.append(f"{role_label}: {content[:500]}")  # Limit each message to 500 chars
+
+        conversation_text = "\n\n".join(history)
+
+        compact_prompt = f"""I need you to create a concise summary of this conversation that preserves all essential context for continuing our work.
+
+CONVERSATION TO SUMMARIZE:
+{conversation_text}
+
+Please create a summary that includes:
+1. Key decisions and conclusions reached
+2. Files that were created, modified, or discussed (with paths)
+3. Technical implementations completed
+4. Current state of the work
+5. Any open questions or next steps
+
+Omit:
+- Lengthy explanations that are no longer relevant
+- Intermediate steps that led to final decisions
+- Verbose descriptions (keep it factual and concise)
+
+Format the summary as a clear, organized narrative that I can use to continue the conversation effectively."""
+
+        compact_conv.add_user_message(compact_prompt)
+
+        # Get summary from LLM
+        try:
+            summary = ""
+            with console.console.status("[dim]Summarizing...[/dim]"):
+                for item in stream_response(compact_conv, tools=None):
+                    if isinstance(item, str):
+                        summary += item
+
+            if not summary:
+                console.print("[red]Failed to generate summary.[/red]")
+                return True
+
+            # Replace conversation history
+            system_msg = next((m for m in conversation.messages if m.role == "system"), None)
+            last_messages = non_system_messages[-2:] if len(non_system_messages) > 2 else []
+
+            conversation.messages = []
+
+            # Add back system message
+            if system_msg:
+                conversation.messages.append(system_msg)
+
+            # Add compacted summary as assistant message
+            from loco.chat import Message
+            conversation.messages.append(Message(
+                role="assistant",
+                content=f"[Previous conversation summary]\n\n{summary}\n\n[End of summary - continuing from here]"
+            ))
+
+            # Add back last 2 messages for immediate context
+            for msg in last_messages:
+                conversation.messages.append(msg)
+
+            # Calculate new token count
+            new_tokens = estimate_conversation_tokens(conversation)
+            saved_tokens = current_tokens - new_tokens
+            saved_percent = (saved_tokens / current_tokens * 100) if current_tokens > 0 else 0
+
+            console.print()
+            console.print(f"[green]✓[/green] Conversation compacted successfully")
+            console.print(f"  New messages: {len([m for m in conversation.messages if m.role != 'system'])} messages")
+            console.print(f"  New estimated tokens: {new_tokens:,} tokens")
+            console.print(f"  Saved: [green]{saved_tokens:,}[/green] tokens ([green]{saved_percent:.1f}%[/green] reduction)")
+
+        except Exception as e:
+            console.print(f"[red]Error during compaction: {e}[/red]")
+
         return True
 
     elif cmd == "/model":
