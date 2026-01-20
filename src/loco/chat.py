@@ -293,6 +293,36 @@ def stream_response(
         )
 
 
+def _display_usage_stats(conversation: Conversation, console: Console, turn_stats_only: bool = False) -> None:
+    """Display usage statistics after a turn.
+    
+    Args:
+        conversation: The conversation with usage tracking
+        console: Console for output
+        turn_stats_only: If True, only show the last turn's stats (not cumulative)
+    """
+    if not conversation.usage or conversation.usage.get_call_count() == 0:
+        return
+    
+    usage = conversation.usage
+    last_stat = usage.stats[-1]
+    
+    # Show per-turn stats
+    console.print(
+        f"\n[dim]💭 {last_stat.total_tokens:,} tokens "
+        f"(in: {last_stat.prompt_tokens:,}, out: {last_stat.completion_tokens:,}) "
+        f"• ${last_stat.cost:.4f}[/dim]"
+    )
+    
+    # Show cumulative session stats if this isn't the first call
+    if not turn_stats_only and usage.get_call_count() > 1:
+        total_cost = usage.get_total_cost()
+        total_tokens = usage.get_total_tokens()
+        console.print(
+            f"[dim]📊 Session: {total_tokens:,} tokens total • ${total_cost:.4f} cumulative[/dim]"
+        )
+
+
 def chat_turn(
     conversation: Conversation,
     user_input: str,
@@ -312,6 +342,9 @@ def chat_turn(
     from loco.ui.components import StreamingMarkdown, Spinner
 
     conversation.add_user_message(user_input)
+    
+    # Track API calls at the start to know which are new
+    initial_call_count = conversation.usage.get_call_count() if conversation.usage else 0
 
     while True:
         # Stream the response
@@ -341,16 +374,9 @@ def chat_turn(
             if first_token:
                 spinner.__exit__(None, None, None)
 
-        # If no tool calls, we're done
+        # If no tool calls, we're done - show final usage
         if not tool_calls:
-            # Show usage info for this turn if available
-            if conversation.usage and conversation.usage.get_call_count() > 0:
-                last_stat = conversation.usage.stats[-1]
-                console.print(
-                    f"\n[dim]💭 {last_stat.total_tokens:,} tokens "
-                    f"(in: {last_stat.prompt_tokens:,}, out: {last_stat.completion_tokens:,}) "
-                    f"• ${last_stat.cost:.4f}[/dim]"
-                )
+            _display_usage_stats(conversation, console)
             break
 
         # Execute tool calls

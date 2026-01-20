@@ -70,6 +70,7 @@ def handle_slash_command(
   [cyan]/load[/cyan] <id>        Load a saved conversation
   [cyan]/sessions[/cyan]         List saved sessions
   [cyan]/stats[/cyan]            Show token usage and cost statistics
+  [cyan]/context[/cyan]          Show context window usage and estimates
   [cyan]/plan[/cyan] <task>      Create a step-by-step plan for a task
   [cyan]/commit[/cyan]           Generate and create a smart commit message
   [cyan]/pr[/cyan]               Generate a pull request description
@@ -173,6 +174,78 @@ def handle_slash_command(
                 )
         
         console.print("\n[dim]Note: Costs are estimates based on standard pricing[/dim]")
+        return True
+
+    elif cmd == "/context":
+        from loco.usage import get_model_context_window, estimate_conversation_tokens
+
+        console.print("[bold]Context Usage[/bold]\n")
+        console.print(f"  Model: [cyan]{conversation.model}[/cyan]")
+
+        # Get context window
+        context_window = get_model_context_window(conversation.model)
+        if context_window:
+            console.print(f"  Context Window: [cyan]{context_window:,}[/cyan] tokens")
+        else:
+            console.print(f"  Context Window: [yellow]Unknown[/yellow]")
+
+        console.print()
+
+        # Estimate current conversation tokens
+        estimated_tokens = estimate_conversation_tokens(conversation)
+
+        # Calculate message breakdown
+        system_tokens = 0
+        message_tokens = 0
+
+        for msg in conversation.messages:
+            if msg.role == "system":
+                if msg.content:
+                    system_tokens += len(msg.content) // 4
+            else:
+                if msg.content:
+                    message_tokens += len(msg.content) // 4
+                if msg.tool_calls:
+                    import json
+                    message_tokens += len(json.dumps(msg.tool_calls)) // 4
+
+        # Add overhead
+        system_tokens += 15  # Format overhead
+        message_tokens += (len([m for m in conversation.messages if m.role != "system"]) * 15)
+
+        console.print("  [bold]Current Conversation:[/bold]")
+        console.print(f"    • System Prompt: [cyan]{system_tokens:,}[/cyan] tokens")
+        console.print(f"    • Messages: [cyan]{message_tokens:,}[/cyan] tokens")
+        console.print(f"    • Total Estimated: [cyan]{estimated_tokens:,}[/cyan] tokens", end="")
+
+        # Show percentage if we know the context window
+        if context_window:
+            percentage = (estimated_tokens / context_window) * 100
+            remaining = context_window - estimated_tokens
+
+            # Color code based on usage
+            if percentage >= 80:
+                percent_color = "red"
+                status = "⚠️"
+            elif percentage >= 60:
+                percent_color = "yellow"
+                status = ""
+            else:
+                percent_color = "green"
+                status = ""
+
+            console.print(f" [{percent_color}]({percentage:.1f}%)[/{percent_color}] {status}")
+            console.print(f"    • Remaining: [cyan]{remaining:,}[/cyan] tokens [{percent_color}]({100-percentage:.1f}%)[/{percent_color}]")
+
+            if percentage >= 80:
+                console.print()
+                console.print("  [yellow]⚠️  Warning: Approaching context window limit[/yellow]")
+                console.print("  [dim]Consider using /clear to reset the conversation[/dim]")
+        else:
+            console.print()
+
+        console.print()
+        console.print("[dim]Note: Token estimates are approximate and may vary from actual usage[/dim]")
         return True
 
     elif cmd == "/plan":
