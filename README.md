@@ -110,7 +110,7 @@ Loco includes 6 built-in tools:
 
 Skills are reusable prompts that teach the LLM specific tasks.
 
-**Location:** `.loco/skills/` or `~/.config/loco/skills/`
+**Location:** `.loco/skills/`, `.claude/skills/` (Claude Desktop compatible), or `~/.config/loco/skills/`
 
 ```markdown
 ---
@@ -162,7 +162,7 @@ Hooks run shell commands at lifecycle events.
 
 Agents are subagents with isolated contexts and restricted tools.
 
-**Location:** `.loco/agents/` or `~/.config/loco/agents/`
+**Location:** `.loco/agents/`, `.claude/agents/` (Claude Desktop compatible), or `~/.config/loco/agents/`
 
 ```markdown
 ---

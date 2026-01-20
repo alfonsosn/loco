@@ -79,8 +79,8 @@ def handle_slash_command(
 [bold]Tips:[/bold]
 - Use model aliases from config (e.g., /model gpt4)
 - Or use full LiteLLM model strings (e.g., /model openai/gpt-4o)
-- Skills are loaded from .loco/skills/ and ~/.config/loco/skills/
-- Agents are loaded from .loco/agents/ and ~/.config/loco/agents/
+- Skills are loaded from .loco/skills/, .claude/skills/, and ~/.config/loco/skills/
+- Agents are loaded from .loco/agents/, .claude/agents/, and ~/.config/loco/agents/
 """)
         return True
 
@@ -432,7 +432,7 @@ def handle_slash_command(
             # List available skills
             if not skills:
                 console.print("[dim]No skills found.[/dim]")
-                console.print("[dim]Add skills to .loco/skills/ or ~/.config/loco/skills/[/dim]")
+                console.print("[dim]Add skills to .loco/skills/, .claude/skills/, or ~/.config/loco/skills/[/dim]")
                 return True
 
             console.print("[bold]Available Skills:[/bold]\n")
@@ -482,7 +482,7 @@ def handle_slash_command(
             # List available agents
             if not agents:
                 console.print("[dim]No agents found.[/dim]")
-                console.print("[dim]Add agents to .loco/agents/ or ~/.config/loco/agents/[/dim]")
+                console.print("[dim]Add agents to .loco/agents/, .claude/agents/, or ~/.config/loco/agents/[/dim]")
                 return True
 
             console.print("[bold]Available Agents:[/bold]\n")

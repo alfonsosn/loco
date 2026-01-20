@@ -44,7 +44,11 @@ class SkillRegistry:
 
         Locations (in precedence order, later overrides earlier):
         1. User skills: ~/.config/loco/skills/
-        2. Project skills: .loco/skills/
+        2. Claude Desktop skills: .claude/skills/ (for compatibility)
+        3. Project skills: .loco/skills/ (highest priority)
+
+        Note: .claude/ support enables seamless integration with Claude Desktop
+        configurations. Both .claude/ and .loco/ can coexist in the same project.
         """
         self.skills.clear()
 
@@ -52,14 +56,16 @@ class SkillRegistry:
         user_skills_dir = get_config_dir() / "skills"
         self._load_skills_from_dir(user_skills_dir)
 
-        # Project skills (highest precedence)
-        if project_dir:
-            project_skills_dir = project_dir / ".loco" / "skills"
-            self._load_skills_from_dir(project_skills_dir)
-        else:
-            # Use current directory
-            project_skills_dir = Path.cwd() / ".loco" / "skills"
-            self._load_skills_from_dir(project_skills_dir)
+        # Project directory to search
+        search_dir = project_dir if project_dir else Path.cwd()
+
+        # Claude Desktop skills (middle precedence)
+        claude_skills_dir = search_dir / ".claude" / "skills"
+        self._load_skills_from_dir(claude_skills_dir)
+
+        # Loco project skills (highest precedence)
+        loco_skills_dir = search_dir / ".loco" / "skills"
+        self._load_skills_from_dir(loco_skills_dir)
 
         self._discovered = True
 
