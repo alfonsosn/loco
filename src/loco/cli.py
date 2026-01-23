@@ -19,7 +19,7 @@ from loco.config import (
 from loco.tools import tool_registry
 from loco.ui.console import get_console, Console
 from loco.history import save_conversation, load_conversation, list_sessions
-from loco.skills import skill_registry, get_skills_system_prompt_section, Skill
+from loco.commands import command_registry, get_commands_system_prompt_section, Command
 from loco.hooks import HookConfig
 from loco.agents import agent_registry, run_agent
 from loco.planner import (
@@ -38,8 +38,8 @@ from loco.git import (
 # Track current session ID for auto-save
 _current_session_id: str | None = None
 
-# Track active skill for current conversation
-_active_skill: Skill | None = None
+# Track active command for current conversation
+_active_command: Command | None = None
 
 
 def handle_slash_command(
@@ -49,7 +49,7 @@ def handle_slash_command(
     console: Console,
 ) -> bool:
     """Handle slash commands. Returns True if command was handled."""
-    global _current_session_id, _active_skill
+    global _current_session_id, _active_command
 
     parts = command.strip().split(maxsplit=1)
     cmd = parts[0].lower()
@@ -63,8 +63,8 @@ def handle_slash_command(
   [cyan]/clear[/cyan]            Clear conversation history
   [cyan]/compact[/cyan]          Summarize conversation to reduce token usage
   [cyan]/model[/cyan] [name]     Show or switch the current model
-  [cyan]/skill[/cyan] [name]     Activate a skill or list available skills
-  [cyan]/skills[/cyan]           List all available skills
+  [cyan]/command[/cyan] [name]   Activate a command or list available commands
+  [cyan]/commands[/cyan]         List all available commands
   [cyan]/agent[/cyan] <name> <task>  Run a subagent with a task
   [cyan]/agents[/cyan]           List all available agents
   [cyan]/save[/cyan] [name]      Save current conversation
@@ -73,15 +73,18 @@ def handle_slash_command(
   [cyan]/stats[/cyan]            Show token usage and cost statistics
   [cyan]/context[/cyan]          Show context window usage and estimates
   [cyan]/plan[/cyan] <task>      Create a step-by-step plan for a task
-  [cyan]/commit[/cyan]           Generate and create a smart commit message
-  [cyan]/pr[/cyan]               Generate a pull request description
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
+
+[bold]Custom Commands:[/bold]
+  Commands can be invoked directly via [cyan]/<command-name>[/cyan]
+  Examples: [cyan]/commit[/cyan], [cyan]/pr[/cyan] (if commands are installed)
+  Use [cyan]/commands[/cyan] to see all available commands
 
 [bold]Tips:[/bold]
 - Use model aliases from config (e.g., /model gpt4)
 - Or use full LiteLLM model strings (e.g., /model openai/gpt-4o)
-- Skills are loaded from .loco/skills/, .claude/skills/, and ~/.config/loco/skills/
+- Commands are loaded from .loco/commands/, .claude/commands/, and ~/.config/loco/commands/
 - Agents are loaded from .loco/agents/, .claude/agents/, and ~/.config/loco/agents/
 """)
         return True
@@ -90,7 +93,7 @@ def handle_slash_command(
         conversation.clear()
         conversation.usage = None
         _current_session_id = None
-        _active_skill = None
+        _active_command = None
         console.print("[dim]Conversation cleared.[/dim]")
         return True
 
@@ -125,7 +128,6 @@ def handle_slash_command(
         console.print("[dim]Generating summary...[/dim]")
 
         # Create a temporary conversation for compaction
-        from loco.chat import Conversation
         compact_conv = Conversation(model=conversation.model, config=config)
 
         # Build compaction prompt
@@ -476,198 +478,54 @@ Format the summary as a clear, organized narrative that I can use to continue th
 
         return True
 
-    elif cmd == "/commit":
-        git_status = get_git_status()
+    elif cmd in ("/command", "/commands"):
+        commands = command_registry.get_user_invocable()
 
-        if not git_status.is_repo:
-            console.print("[red]Not in a git repository[/red]")
-            return True
-
-        if not git_status.has_changes():
-            console.print("[dim]No changes to commit[/dim]")
-            return True
-
-        # Show current status
-        console.print(f"[bold]Current branch:[/bold] {git_status.branch}")
-        if git_status.staged_files:
-            console.print(f"[green]Staged files:[/green] {len(git_status.staged_files)}")
-        if git_status.unstaged_files:
-            console.print(f"[yellow]Unstaged files:[/yellow] {len(git_status.unstaged_files)}")
-
-        # Ask if we should stage all changes
-        if git_status.unstaged_files:
-            console.print("\n[yellow]Stage all changes?[/yellow] [dim](yes/no)[/dim]")
-            stage_response = console.get_input("> ")
-            if stage_response and stage_response.lower() in ["yes", "y"]:
-                stage_all_changes()
-                console.print("[dim]Staged all changes[/dim]")
-
-        # Get diff
-        diff = get_staged_diff() or get_all_diff()
-        if not diff:
-            console.print("[red]No diff found[/red]")
-            return True
-
-        # Generate commit message
-        console.print("\n[dim]Generating commit message...[/dim]")
-        prompt = generate_commit_message_prompt(diff)
-
-        # Create temporary conversation for commit message
-        commit_conv = Conversation(model=conversation.model, config=conversation.config)
-        commit_conv.add_user_message(prompt)
-
-        try:
-            commit_message = ""
-            with console.console.status("[dim]Thinking...[/dim]"):
-                from loco.chat import stream_response
-                for item in stream_response(commit_conv, tools=None):
-                    if isinstance(item, str):
-                        commit_message += item
-
-            commit_message = commit_message.strip()
-
-            # Show generated message
-            console.print("\n[bold]Generated commit message:[/bold]")
-            console.print(f"[cyan]{commit_message}[/cyan]")
-            console.print("\n[bold]Create this commit?[/bold] [dim](yes/no/edit)[/dim]")
-
-            response = console.get_input("> ")
-
-            if response and response.lower() == "edit":
-                console.print("\n[dim]Enter your commit message (press Ctrl+D when done):[/dim]")
-                edited_message = console.get_multiline_input("> ")
-                if edited_message:
-                    commit_message = edited_message.strip()
-                else:
-                    console.print("[dim]Commit cancelled[/dim]")
-                    return True
-            elif not response or response.lower() not in ["yes", "y"]:
-                console.print("[dim]Commit cancelled[/dim]")
+        if not args or cmd == "/commands":
+            # List available commands
+            if not commands:
+                console.print("[dim]No commands found.[/dim]")
+                console.print("[dim]Add commands to .loco/commands/, .claude/commands/, or ~/.config/loco/commands/[/dim]")
                 return True
 
-            # Create commit
-            success, output = create_commit(commit_message)
-            if success:
-                console.print(f"[green]✓[/green] Commit created successfully")
-                console.print(f"[dim]{output}[/dim]")
-            else:
-                console.print(f"[red]Failed to create commit:[/red]")
-                console.print(output)
+            console.print("[bold]Available Commands:[/bold]\n")
+            for command in commands:
+                active_marker = " [green]<-- active[/green]" if _active_command and _active_command.name == command.name else ""
+                console.print(f"  [cyan]{command.name}[/cyan]: {command.description}{active_marker}")
 
-        except Exception as e:
-            console.print(f"[red]Error generating commit message: {e}[/red]")
-
-        return True
-
-    elif cmd == "/pr":
-        git_status = get_git_status()
-
-        if not git_status.is_repo:
-            console.print("[red]Not in a git repository[/red]")
+            if _active_command:
+                console.print(f"\n[dim]Active command: {_active_command.name}[/dim]")
+                console.print("[dim]Use /command off to deactivate[/dim]")
             return True
 
-        branch = git_status.branch
-        if not branch:
-            console.print("[red]Not on a branch[/red]")
-            return True
-
-        if branch in ["main", "master"]:
-            console.print("[yellow]Warning: You're on the main/master branch[/yellow]")
-            console.print("[dim]Usually you'd create a PR from a feature branch[/dim]")
-
-        # Get base branch (default to main)
-        console.print("[bold]Base branch?[/bold] [dim](default: main)[/dim]")
-        base_branch = console.get_input("> ") or "main"
-
-        console.print(f"\n[dim]Generating PR description for {branch} → {base_branch}...[/dim]")
-
-        # Get commit history and diff
-        commits = get_commit_history(base_branch)
-        diff = get_branch_diff(base_branch)
-
-        if not commits and not diff:
-            console.print("[red]No changes found between branches[/red]")
-            return True
-
-        # Generate PR description
-        prompt = generate_pr_description_prompt(branch, base_branch, commits, diff or "")
-
-        pr_conv = Conversation(model=conversation.model, config=conversation.config)
-        pr_conv.add_user_message(prompt)
-
-        try:
-            pr_description = ""
-            with console.console.status("[dim]Thinking...[/dim]"):
-                from loco.chat import stream_response
-                for item in stream_response(pr_conv, tools=None):
-                    if isinstance(item, str):
-                        pr_description += item
-
-            # Display PR description
-            console.print("\n[bold]Generated PR Description:[/bold]\n")
-            console.print_markdown(pr_description)
-
-            # Save to file
-            pr_file = Path(".loco") / "PR_DESCRIPTION.md"
-            pr_file.parent.mkdir(exist_ok=True)
-            pr_file.write_text(pr_description)
-
-            console.print(f"\n[green]✓[/green] PR description saved to: [cyan]{pr_file}[/cyan]")
-            console.print("[dim]You can use this when creating your pull request[/dim]")
-
-        except Exception as e:
-            console.print(f"[red]Error generating PR description: {e}[/red]")
-
-        return True
-
-    elif cmd in ("/skill", "/skills"):
-        skills = skill_registry.get_user_invocable()
-
-        if not args or cmd == "/skills":
-            # List available skills
-            if not skills:
-                console.print("[dim]No skills found.[/dim]")
-                console.print("[dim]Add skills to .loco/skills/, .claude/skills/, or ~/.config/loco/skills/[/dim]")
-                return True
-
-            console.print("[bold]Available Skills:[/bold]\n")
-            for skill in skills:
-                active_marker = " [green]<-- active[/green]" if _active_skill and _active_skill.name == skill.name else ""
-                console.print(f"  [cyan]{skill.name}[/cyan]: {skill.description}{active_marker}")
-
-            if _active_skill:
-                console.print(f"\n[dim]Active skill: {_active_skill.name}[/dim]")
-                console.print("[dim]Use /skill off to deactivate[/dim]")
-            return True
-
-        # Activate or deactivate a skill
+        # Activate or deactivate a command
         if args.lower() == "off":
-            if _active_skill:
-                console.print(f"[dim]Deactivated skill: {_active_skill.name}[/dim]")
-                _active_skill = None
-                # Rebuild system prompt without skill
+            if _active_command:
+                console.print(f"[dim]Deactivated command: {_active_command.name}[/dim]")
+                _active_command = None
+                # Rebuild system prompt without command
                 conversation.add_system_message(
-                    get_default_system_prompt(os.getcwd(), get_skills_system_prompt_section())
+                    get_default_system_prompt(os.getcwd(), get_commands_system_prompt_section())
                 )
             else:
-                console.print("[dim]No active skill to deactivate[/dim]")
+                console.print("[dim]No active command to deactivate[/dim]")
             return True
 
-        # Find and activate the skill
-        skill = skill_registry.get(args)
-        if skill is None:
-            console.print(f"[red]Skill not found: {args}[/red]")
-            console.print("[dim]Use /skills to see available skills[/dim]")
+        # Find and activate the command
+        command = command_registry.get(args)
+        if command is None:
+            console.print(f"[red]Command not found: {args}[/red]")
+            console.print("[dim]Use /commands to see available commands[/dim]")
             return True
 
-        _active_skill = skill
-        # Update system prompt with skill content
-        skills_section = get_skills_system_prompt_section()
-        skills_section += skill.get_system_prompt_addition()
+        _active_command = command
+        # Update system prompt with command content
+        commands_section = get_commands_system_prompt_section()
+        commands_section += command.get_system_prompt_addition()
         conversation.add_system_message(
-            get_default_system_prompt(os.getcwd(), skills_section)
+            get_default_system_prompt(os.getcwd(), commands_section)
         )
-        console.print(f"[dim]Activated skill: {skill.name}[/dim]")
+        console.print(f"[dim]Activated command: {command.name}[/dim]")
         return True
 
     elif cmd in ("/agent", "/agents"):
@@ -732,6 +590,42 @@ Format the summary as a clear, organized narrative that I can use to continue th
         console.print("[dim]Goodbye![/dim]")
         sys.exit(0)
 
+    # Check if command matches a custom command (e.g., /commit, /pr)
+    command_name = cmd[1:]  # Remove leading slash
+    custom_command = command_registry.get(command_name)
+    if custom_command and custom_command.user_invocable:
+        # Execute command one-shot style
+        from loco.chat import stream_response
+
+        # Create temporary conversation for command execution
+        command_conv = Conversation(model=conversation.model, config=conversation.config)
+
+        # Add command instructions as system message
+        command_conv.add_system_message(custom_command.content)
+
+        # Add any args as user message
+        if args:
+            command_conv.add_user_message(args)
+        else:
+            # Add empty user message to trigger execution
+            command_conv.add_user_message("Execute the command instructions.")
+
+        try:
+            # Execute command
+            for item in stream_response(command_conv, tools=tool_registry.get_all()):
+                if isinstance(item, str):
+                    console.print(item, end="")
+                elif isinstance(item, ToolCall):
+                    # Execute tool
+                    result = tool_executor(item)
+                    command_conv.add_tool_result(item.id, result)
+
+            console.print()  # Final newline
+        except Exception as e:
+            console.print(f"\n[red]Error executing command: {e}[/red]")
+
+        return True
+
     return False
 
 
@@ -775,10 +669,10 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
     # Resolve model
     effective_model = resolve_model(model or config.default_model, config)
 
-    # Discover skills and agents
-    skill_registry.discover()
+    # Discover commands and agents
+    command_registry.discover()
     agent_registry.discover()
-    skills_section = get_skills_system_prompt_section()
+    commands_section = get_commands_system_prompt_section()
 
     # Initialize UI
     console = get_console()
@@ -787,12 +681,12 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
     # Print welcome
     console.print_welcome(effective_model, os.getcwd())
 
-    # Show discovered skills and agents count
-    skill_count = len(skill_registry.get_all())
+    # Show discovered commands and agents count
+    command_count = len(command_registry.get_all())
     agent_count = len(agent_registry.get_all())
     info_parts = []
-    if skill_count > 0:
-        info_parts.append(f"{skill_count} skill(s)")
+    if command_count > 0:
+        info_parts.append(f"{command_count} command(s)")
     if agent_count > 0:
         info_parts.append(f"{agent_count} agent(s)")
     if info_parts:
@@ -803,7 +697,7 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
         model=effective_model,
         config=config,
     )
-    conversation.add_system_message(get_default_system_prompt(os.getcwd(), skills_section))
+    conversation.add_system_message(get_default_system_prompt(os.getcwd(), commands_section))
 
     # Get tools
     tools = tool_registry.get_openai_tools()

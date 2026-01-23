@@ -1,4 +1,4 @@
-"""Skills system for loco - reusable prompts that teach the LLM specific tasks."""
+"""Commands system for loco - reusable prompts that teach the LLM specific tasks."""
 
 import os
 import re
@@ -12,8 +12,8 @@ from loco.config import get_config_dir
 
 
 @dataclass
-class Skill:
-    """A skill definition loaded from a SKILL.md file."""
+class Command:
+    """A command definition loaded from a COMMAND.md file."""
 
     name: str
     description: str
@@ -24,75 +24,75 @@ class Skill:
     path: Path | None = None
 
     def get_system_prompt_addition(self) -> str:
-        """Get the content to add to system prompt when skill is active."""
+        """Get the content to add to system prompt when command is active."""
         return f"""
---- SKILL: {self.name} ---
+--- COMMAND: {self.name} ---
 {self.content}
---- END SKILL ---
+--- END COMMAND ---
 """
 
 
 @dataclass
-class SkillRegistry:
-    """Registry for discovering and managing skills."""
+class CommandRegistry:
+    """Registry for discovering and managing commands."""
 
-    skills: dict[str, Skill] = field(default_factory=dict)
+    commands: dict[str, Command] = field(default_factory=dict)
     _discovered: bool = False
 
     def discover(self, project_dir: Path | None = None) -> None:
-        """Discover skills from all locations.
+        """Discover commands from all locations.
 
         Locations (in precedence order, later overrides earlier):
-        1. User skills: ~/.config/loco/skills/
-        2. Claude Desktop skills: .claude/skills/ (for compatibility)
-        3. Project skills: .loco/skills/ (highest priority)
+        1. User commands: ~/.config/loco/commands/
+        2. Claude Desktop commands: .claude/commands/ (for compatibility)
+        3. Project commands: .loco/commands/ (highest priority)
 
         Note: .claude/ support enables seamless integration with Claude Desktop
         configurations. Both .claude/ and .loco/ can coexist in the same project.
         """
-        self.skills.clear()
+        self.commands.clear()
 
-        # User skills (lowest precedence)
-        user_skills_dir = get_config_dir() / "skills"
-        self._load_skills_from_dir(user_skills_dir)
+        # User commands (lowest precedence)
+        user_commands_dir = get_config_dir() / "commands"
+        self._load_commands_from_dir(user_commands_dir)
 
         # Project directory to search
         search_dir = project_dir if project_dir else Path.cwd()
 
-        # Claude Desktop skills (middle precedence)
-        claude_skills_dir = search_dir / ".claude" / "skills"
-        self._load_skills_from_dir(claude_skills_dir)
+        # Claude Desktop commands (middle precedence)
+        claude_commands_dir = search_dir / ".claude" / "commands"
+        self._load_commands_from_dir(claude_commands_dir)
 
-        # Loco project skills (highest precedence)
-        loco_skills_dir = search_dir / ".loco" / "skills"
-        self._load_skills_from_dir(loco_skills_dir)
+        # Loco project commands (highest precedence)
+        loco_commands_dir = search_dir / ".loco" / "commands"
+        self._load_commands_from_dir(loco_commands_dir)
 
         self._discovered = True
 
-    def _load_skills_from_dir(self, skills_dir: Path) -> None:
-        """Load all skills from a directory."""
-        if not skills_dir.exists():
+    def _load_commands_from_dir(self, commands_dir: Path) -> None:
+        """Load all commands from a directory."""
+        if not commands_dir.exists():
             return
 
-        # Skills are in subdirectories: skills/skill-name/SKILL.md
-        for skill_dir in skills_dir.iterdir():
-            if not skill_dir.is_dir():
+        # Commands are in subdirectories: commands/command-name/COMMAND.md
+        for command_dir in commands_dir.iterdir():
+            if not command_dir.is_dir():
                 continue
 
-            skill_file = skill_dir / "SKILL.md"
-            if not skill_file.exists():
+            command_file = command_dir / "COMMAND.md"
+            if not command_file.exists():
                 continue
 
             try:
-                skill = self._parse_skill_file(skill_file)
-                if skill:
-                    self.skills[skill.name] = skill
+                command = self._parse_command_file(command_file)
+                if command:
+                    self.commands[command.name] = command
             except Exception as e:
-                # Log but don't fail on individual skill errors
-                print(f"Warning: Failed to load skill from {skill_file}: {e}")
+                # Log but don't fail on individual command errors
+                print(f"Warning: Failed to load command from {command_file}: {e}")
 
-    def _parse_skill_file(self, path: Path) -> Skill | None:
-        """Parse a SKILL.md file into a Skill object."""
+    def _parse_command_file(self, path: Path) -> Command | None:
+        """Parse a COMMAND.md file into a Command object."""
         content = path.read_text()
 
         # Parse YAML frontmatter
@@ -126,7 +126,7 @@ class SkillRegistry:
         if isinstance(allowed_tools, str):
             allowed_tools = [t.strip() for t in allowed_tools.split(",")]
 
-        return Skill(
+        return Command(
             name=name,
             description=description,
             content=body.strip(),
@@ -136,36 +136,36 @@ class SkillRegistry:
             path=path,
         )
 
-    def get(self, name: str) -> Skill | None:
-        """Get a skill by name."""
+    def get(self, name: str) -> Command | None:
+        """Get a command by name."""
         if not self._discovered:
             self.discover()
-        return self.skills.get(name)
+        return self.commands.get(name)
 
-    def get_all(self) -> list[Skill]:
-        """Get all discovered skills."""
+    def get_all(self) -> list[Command]:
+        """Get all discovered commands."""
         if not self._discovered:
             self.discover()
-        return list(self.skills.values())
+        return list(self.commands.values())
 
-    def get_user_invocable(self) -> list[Skill]:
-        """Get all skills that can be manually invoked."""
-        return [s for s in self.get_all() if s.user_invocable]
+    def get_user_invocable(self) -> list[Command]:
+        """Get all commands that can be manually invoked."""
+        return [c for c in self.get_all() if c.user_invocable]
 
-    def get_skill_descriptions(self) -> str:
-        """Get a formatted string of all skill descriptions for the LLM."""
-        skills = self.get_all()
-        if not skills:
+    def get_command_descriptions(self) -> str:
+        """Get a formatted string of all command descriptions for the LLM."""
+        commands = self.get_all()
+        if not commands:
             return ""
 
-        lines = ["Available skills (use when relevant):"]
-        for skill in skills:
-            lines.append(f"- {skill.name}: {skill.description}")
+        lines = ["Available commands (use when relevant):"]
+        for command in commands:
+            lines.append(f"- {command.name}: {command.description}")
 
         return "\n".join(lines)
 
-    def match_skills(self, user_input: str, limit: int = 3) -> list[Skill]:
-        """Find skills that might be relevant to the user's request.
+    def match_commands(self, user_input: str, limit: int = 3) -> list[Command]:
+        """Find commands that might be relevant to the user's request.
 
         This is a simple keyword-based matching. For better results,
         you could use embeddings or LLM-based matching.
@@ -174,14 +174,14 @@ class SkillRegistry:
             self.discover()
 
         user_lower = user_input.lower()
-        scored_skills: list[tuple[int, Skill]] = []
+        scored_commands: list[tuple[int, Command]] = []
 
-        for skill in self.skills.values():
+        for command in self.commands.values():
             score = 0
-            desc_lower = skill.description.lower()
-            name_lower = skill.name.lower()
+            desc_lower = command.description.lower()
+            name_lower = command.name.lower()
 
-            # Check if skill name is mentioned
+            # Check if command name is mentioned
             if name_lower in user_lower:
                 score += 10
 
@@ -206,20 +206,20 @@ class SkillRegistry:
                         score += 5
 
             if score > 0:
-                scored_skills.append((score, skill))
+                scored_commands.append((score, command))
 
         # Sort by score descending and return top matches
-        scored_skills.sort(key=lambda x: x[0], reverse=True)
-        return [skill for _, skill in scored_skills[:limit]]
+        scored_commands.sort(key=lambda x: x[0], reverse=True)
+        return [command for _, command in scored_commands[:limit]]
 
 
 # Global registry instance
-skill_registry = SkillRegistry()
+command_registry = CommandRegistry()
 
 
-def get_skills_system_prompt_section() -> str:
-    """Get the skills section to add to the system prompt."""
-    descriptions = skill_registry.get_skill_descriptions()
+def get_commands_system_prompt_section() -> str:
+    """Get the commands section to add to the system prompt."""
+    descriptions = command_registry.get_command_descriptions()
     if not descriptions:
         return ""
 
@@ -227,5 +227,5 @@ def get_skills_system_prompt_section() -> str:
 
 {descriptions}
 
-When a skill matches the user's request, you should follow its instructions.
+When a command matches the user's request, you should follow its instructions.
 """

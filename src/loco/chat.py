@@ -115,7 +115,7 @@ class Conversation:
             self.messages.append(system_msg)
 
 
-def get_default_system_prompt(cwd: str, skills_section: str = "") -> str:
+def get_default_system_prompt(cwd: str, commands_section: str = "") -> str:
     """Get the default system prompt for loco."""
     # Get git status if in a repository
     git_info = ""
@@ -155,8 +155,8 @@ Available tools:
 - glob: Find files matching a pattern (e.g., '**/*.py')
 - grep: Search file contents with regex"""
 
-    if skills_section:
-        base_prompt += f"\n{skills_section}"
+    if commands_section:
+        base_prompt += f"\n{commands_section}"
 
     return base_prompt
 
