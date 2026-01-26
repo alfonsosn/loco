@@ -23,6 +23,9 @@ from loco.config import get_config_dir
 class Console:
     """Wrapper around Rich console with loco-specific functionality."""
 
+    # Horizontal padding for the TUI (number of spaces on each side)
+    PADDING = 2
+
     def __init__(self) -> None:
         self.console = RichConsole()
         self._setup_prompt_session()
@@ -41,8 +44,8 @@ class Console:
         })
 
         # Create key bindings that work like Claude Code
-        # - Enter submits (like single-line mode)  
-        # - Alt+Enter adds a newline (for explicit multi-line)
+        # - Enter submits (like single-line mode)
+        # - Shift+Enter or Alt+Enter adds a newline (for explicit multi-line)
         # - Pasting multiline content works
         kb = KeyBindings()
 
@@ -51,17 +54,24 @@ class Console:
             """Enter submits the input."""
             event.current_buffer.validate_and_handle()
 
+        @kb.add('c-j')
+        def _(event):
+            """Ctrl+J inserts a newline for multiline input."""
+            event.current_buffer.insert_text('\n')
+
         @kb.add('escape', 'enter')
         def _(event):
             """Alt+Enter inserts a newline for multiline input."""
             event.current_buffer.insert_text('\n')
 
+        # Continuation prompt aligns with the input after padding + "> "
+        continuation = " " * (self.PADDING + 2)
         self.prompt_session: PromptSession[str] = PromptSession(
             history=FileHistory(str(history_file)),
             style=self.prompt_style,
             multiline=True,  # Allow multiline (for pasting), but Enter submits
             key_bindings=kb,
-            prompt_continuation="  ",  # Continuation prompt for multiline
+            prompt_continuation=continuation,
         )
 
     def print(self, *args: Any, **kwargs: Any) -> None:
@@ -98,14 +108,25 @@ class Console:
         """Print current model information."""
         self.console.print(f"[dim]Model: {model}[/dim]")
 
+    def _pad(self, text: str) -> str:
+        """Add horizontal padding to text."""
+        padding = " " * self.PADDING
+        return f"{padding}{text}"
+
+    def _separator(self) -> str:
+        """Create a separator line with padding."""
+        padding = " " * self.PADDING
+        line_width = max(1, self.console.width - (self.PADDING * 2))
+        return f"{padding}[dim]{'─' * line_width}[/dim]"
+
     def print_welcome(self, model: str, cwd: str) -> None:
         """Print welcome message - minimal Claude Code style."""
         self.console.print()
-        self.console.print("[bold]loco[/bold] [dim]v0.1.0[/dim]")
-        self.console.print(f"[dim]cwd:[/dim] {cwd}")
-        self.console.print(f"[dim]model:[/dim] {model}")
+        self.console.print(self._pad("[bold]loco[/bold] [dim]v0.1.0[/dim]"))
+        self.console.print(self._pad(f"[dim]cwd:[/dim] {cwd}"))
+        self.console.print(self._pad(f"[dim]model:[/dim] {model}"))
         self.console.print()
-        self.console.print("[dim]/help for commands · alt+enter for newline · ctrl+c to exit[/dim]")
+        self.console.print(self._pad("[dim]/help for commands · ctrl+j for newline · ctrl+c to exit[/dim]"))
         self.console.print()
 
     def get_input(self, prompt: str = "> ") -> str | None:
@@ -113,21 +134,22 @@ class Console:
         try:
             # Print top separator line (Claude Code style)
             self.console.print()
-            self.console.print("[dim]" + "─" * self.console.width + "[/dim]")
+            self.console.print(self._separator())
 
-            # Use formatted prompt with style
+            # Use formatted prompt with style and padding
+            padding = " " * self.PADDING
             result = self.prompt_session.prompt(
-                [("class:prompt", prompt), ("", " ")],
+                [("", padding), ("class:prompt", prompt), ("", " ")],
             )
 
             # Print bottom separator line (only if we got input)
             if result is not None:
-                self.console.print("[dim]" + "─" * self.console.width + "[/dim]")
+                self.console.print(self._separator())
 
                 # Check if pasted content (multiline)
                 if '\n' in result:
                     line_count = result.count('\n') + 1
-                    self.console.print(f"[dim]Pasted {line_count} lines[/dim]")
+                    self.console.print(self._pad(f"[dim]Pasted {line_count} lines[/dim]"))
                 self.console.print()
 
             return result
@@ -151,17 +173,18 @@ class Console:
                 event.current_buffer.validate_and_handle()
 
             # Print top separator line
-            self.console.print("[dim]" + "─" * self.console.width + "[/dim]")
-            self.console.print("[dim]Alt+Enter to submit, Enter for new line[/dim]")
+            self.console.print(self._separator())
+            self.console.print(self._pad("[dim]Alt+Enter to submit, Enter for new line[/dim]"))
 
+            padding = " " * self.PADDING
             result = self.prompt_session.prompt(
-                [("class:prompt", prompt)],
+                [("", padding), ("class:prompt", prompt)],
                 multiline=True,
                 key_bindings=kb,
             )
 
             # Print bottom separator line
-            self.console.print("[dim]" + "─" * self.console.width + "[/dim]")
+            self.console.print(self._separator())
 
             return result
         except (EOFError, KeyboardInterrupt):
