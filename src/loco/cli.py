@@ -2,6 +2,7 @@
 
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 import click
@@ -40,6 +41,9 @@ _current_session_id: str | None = None
 
 # Track active command for current conversation
 _active_command: Command | None = None
+
+# Track if bash mode is enabled
+_bash_mode: bool = False
 
 
 def handle_slash_command(
@@ -644,12 +648,20 @@ def tool_executor(tool_call: ToolCall) -> str:
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help="Working directory",
 )
+@click.option(
+    "--bash", "-b",
+    is_flag=True,
+    help="Enable bash command mode (changes prompt to '!')",
+)
 @click.version_option(version=__version__)
 @click.pass_context
-def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
+def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> None:
     """Loco - LLM Coding Assistant CLI.
 
     An AI-powered coding assistant that works with any OpenAI-compatible LLM.
+
+    When --bash mode is enabled, the prompt changes from '>' to '!' and commands
+    are executed directly as shell commands instead of being sent to the LLM.
     """
     # If a subcommand is invoked, let it handle things
     if ctx.invoked_subcommand is not None:
@@ -678,6 +690,10 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
     console = get_console()
     rich_console = console.console
 
+    # Track bash mode
+    global _bash_mode
+    _bash_mode = bash
+    
     # Print welcome
     console.print_welcome(effective_model, os.getcwd())
 
@@ -708,7 +724,9 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
     # Main loop
     while True:
         try:
-            user_input = console.get_input("> ")
+            # Determine prompt based on bash mode
+            prompt = "!" if _bash_mode else "> "
+            user_input = console.get_input(prompt)
 
             if user_input is None:
                 # Ctrl+C or Ctrl+D
@@ -728,6 +746,31 @@ def main(ctx: click.Context, model: str | None, cwd: str | None) -> None:
                     console.print_error(f"Unknown command: {user_input.split()[0]}")
                     console.print("[dim]Type /help for available commands[/dim]")
                     continue
+
+            # Handle bash mode - execute as shell command if bash mode is enabled
+            if _bash_mode:
+                try:
+                    # Execute bash command and capture output
+                    result = subprocess.run(
+                        user_input,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        check=False  # Don't raise exception on non-zero exit codes
+                    )
+                    
+                    # Show output
+                    if result.stdout:
+                        console.print(result.stdout, end="")
+                    if result.stderr:
+                        console.print(f"[red]{result.stderr}[/red]", end="")
+                    
+                    # Show exit code
+                    if result.returncode != 0:
+                        console.print(f"[dim]Exit code: {result.returncode}[/dim]")
+                except Exception as e:
+                    console.print_error(f"Error executing command: {e}")
+                continue
 
             # Regular chat
             try:
