@@ -16,14 +16,19 @@
 ## ⚡ Quick Start
 
 ```bash
-# Install
+# Install with pipx (recommended)
+pipx install git+https://github.com/showdownlabs/loco.git
+
+# Or install with pip
 pip install git+https://github.com/showdownlabs/loco.git
 
 # Run
 loco
 ```
 
-That's it. Loco creates a config file on first run at `~/.config/loco/config.json`.
+That's it. Loco creates a config file on first run at `~/.config/loco/config.toml`.
+
+See [Installation Guide](docs/installation.md) for more options.
 
 ---
 
