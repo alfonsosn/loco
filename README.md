@@ -233,11 +233,18 @@ Via [LiteLLM](https://docs.litellm.ai/docs/providers):
 
 ## 🔧 Development
 
+**Quick Start:**
 ```bash
 git clone https://github.com/showdownlabs/loco.git
 cd loco
-pip install -e .
+pipx install -e .  # Editable mode - changes take effect immediately
 ```
+
+**See [Development Guide](docs/development.md)** for detailed instructions on:
+- Setting up your environment
+- Making changes and testing
+- Creating pull requests
+- Building and releasing
 
 ---
 
@@ -247,6 +254,9 @@ For comprehensive guides and documentation, see:
 
 - **[Full Documentation](https://showdownlabs.github.io/loco/)** — Complete docs site
 - **[Quick Start Guide](docs/QUICKSTART.md)** — Hands-on examples and workflows
+- **[Development Guide](docs/development.md)** — Contributing and local development
+- **[Installation Guide](docs/installation.md)** — Installing from GitHub or PyPI
+- **[Release Guide](docs/releasing.md)** — Creating releases and versioning
 - **[Architecture Guide](docs/ARCHITECTURE.md)** — How loco works under the hood
 - **[Technical Analysis](docs/ANALYSIS.md)** — Deep dive into design and implementation
 - **[MCP Guide](docs/MCP.md)** — Model Context Protocol integration
