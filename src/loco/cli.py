@@ -42,9 +42,6 @@ _current_session_id: str | None = None
 # Track active command for current conversation
 _active_command: Command | None = None
 
-# Track if bash mode is enabled
-_bash_mode: bool = False
-
 
 def handle_slash_command(
     command: str,
@@ -80,8 +77,12 @@ def handle_slash_command(
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
 
-[bold]Bash Commands:[/bold]
-  Prefix commands with [cyan]![/cyan] to execute them as shell commands
+[bold]Input Modes:[/bold]
+  Press [cyan]Shift+Tab[/cyan] to cycle between input modes:
+    • [cyan]Chat mode[/cyan] ([cyan]>[/cyan]): Talk to the AI assistant
+    • [cyan]Bash mode[/cyan] ([yellow]![/yellow]): Execute shell commands directly
+
+  You can also prefix commands with [cyan]![/cyan] in chat mode for one-off bash commands
   Examples: [cyan]! ls -la[/cyan], [cyan]! git status[/cyan], [cyan]! pwd[/cyan]
 
 [bold]Custom Commands:[/bold]
@@ -127,7 +128,7 @@ def handle_slash_command(
         console.print()
         console.print("[bold]Continue?[/bold] [dim](yes/no)[/dim]")
 
-        response = console.get_input("> ")
+        response, _ = console.get_input("> ")
         if not response or response.lower() not in ["yes", "y"]:
             console.print("[dim]Compaction cancelled.[/dim]")
             return True
@@ -435,7 +436,7 @@ Format the summary as a clear, organized narrative that I can use to continue th
             console.print("\n[bold]Approve this plan?[/bold] [dim](yes/no)[/dim]")
 
             # Get user approval
-            approval = console.get_input("> ")
+            approval, _ = console.get_input("> ")
             if approval and approval.lower() in ["yes", "y"]:
                 plan.status = PlanStatus.APPROVED
                 plan.status = PlanStatus.EXECUTING
@@ -469,7 +470,7 @@ Format the summary as a clear, organized narrative that I can use to continue th
                         console.print(f"[red]Error: {e}[/red]\n")
 
                         console.print("[yellow]Continue with remaining steps?[/yellow] [dim](yes/no)[/dim]")
-                        continue_resp = console.get_input("> ")
+                        continue_resp, _ = console.get_input("> ")
                         if not continue_resp or continue_resp.lower() not in ["yes", "y"]:
                             break
 
@@ -655,7 +656,7 @@ def tool_executor(tool_call: ToolCall) -> str:
 @click.option(
     "--bash", "-b",
     is_flag=True,
-    help="Enable bash command mode (changes prompt to '!')",
+    help="Start in bash mode (use Shift+Tab to cycle modes)",
 )
 @click.version_option(version=__version__)
 @click.pass_context
@@ -695,7 +696,12 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
     # Initialize UI
     console = get_console()
     rich_console = console.console
-    
+
+    # Set initial mode based on --bash flag
+    if bash:
+        from loco.ui.console import InputMode
+        console.current_mode = InputMode.BASH
+
     # Print welcome
     console.print_welcome(effective_model, os.getcwd())
 
@@ -726,8 +732,8 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
     # Main loop
     while True:
         try:
-            # Always use > prompt, detect mode from input prefix
-            user_input = console.get_input("> ")
+            # Get input and current mode
+            user_input, mode = console.get_input()
 
             if user_input is None:
                 # Ctrl+C or Ctrl+D
@@ -739,7 +745,7 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
             if not user_input:
                 continue
 
-            # Handle slash commands first
+            # Handle slash commands first (works in all modes)
             if user_input.startswith("/"):
                 if handle_slash_command(user_input, conversation, config, console):
                     continue
@@ -748,16 +754,51 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
                     console.print("[dim]Type /help for available commands[/dim]")
                     continue
 
-            # Handle ! prefix for bash commands (inline bash mode)
+            # Import InputMode to check current mode
+            from loco.ui.console import InputMode
+
+            # Handle bash mode - execute input as bash command
+            if mode == InputMode.BASH:
+                if not user_input:
+                    console.print("[yellow]Enter a bash command[/yellow]")
+                    console.print("[dim]Example: ls -la[/dim]")
+                    console.print("[dim]Press Shift+Tab to switch back to chat mode[/dim]")
+                    continue
+
+                try:
+                    # Execute bash command and capture output
+                    result = subprocess.run(
+                        user_input,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        check=False  # Don't raise exception on non-zero exit codes
+                    )
+
+                    # Show output
+                    if result.stdout:
+                        console.print(result.stdout, end="")
+                    if result.stderr:
+                        console.print(f"[red]{result.stderr}[/red]", end="")
+
+                    # Show exit code if non-zero
+                    if result.returncode != 0:
+                        console.print(f"[dim]Exit code: {result.returncode}[/dim]")
+                except Exception as e:
+                    console.print_error(f"Error executing command: {e}")
+                continue
+
+            # Handle ! prefix for bash commands (inline bash mode in CHAT mode)
             if user_input.startswith("!"):
                 # Remove the ! prefix and execute as bash command
                 bash_command = user_input[1:].strip()
-                
+
                 if not bash_command:
                     console.print("[yellow]Usage: ! <command>[/yellow]")
                     console.print("[dim]Example: ! ls -la[/dim]")
+                    console.print("[dim]Or press Shift+Tab to enter bash mode[/dim]")
                     continue
-                
+
                 try:
                     # Execute bash command and capture output
                     result = subprocess.run(
@@ -767,13 +808,13 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
                         text=True,
                         check=False  # Don't raise exception on non-zero exit codes
                     )
-                    
+
                     # Show output
                     if result.stdout:
                         console.print(result.stdout, end="")
                     if result.stderr:
                         console.print(f"[red]{result.stderr}[/red]", end="")
-                    
+
                     # Show exit code if non-zero
                     if result.returncode != 0:
                         console.print(f"[dim]Exit code: {result.returncode}[/dim]")
