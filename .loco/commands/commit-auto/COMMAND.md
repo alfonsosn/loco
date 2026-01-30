@@ -1,6 +1,6 @@
 ---
-name: commit
-description: Generate a conventional commit message and create a git commit
+name: commit-auto
+description: Automatically analyze changes and create logical git commits (project)
 user-invocable: true
 ---
 
