@@ -37,17 +37,61 @@ loco mcp-server
 
 ### 2. Use External MCP Servers in Loco
 
+Loco supports two types of MCP servers:
+- **Command-based**: Local processes spawned by loco
+- **HTTP-based**: Remote HTTP/SSE MCP servers
+
+#### Command-Based MCP Servers
+
 Add to your loco config (`~/.config/loco/config.json`):
 
 ```json
 {
   "mcp_servers": {
     "filesystem": {
+      "type": "command",
       "command": ["npx"],
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
     }
   }
 }
+```
+
+Or use the CLI:
+
+```bash
+loco mcp add-json filesystem '{"type":"command","command":["npx","-y","@modelcontextprotocol/server-filesystem","/tmp"]}'
+```
+
+#### HTTP-Based MCP Servers
+
+For HTTP-based MCP servers (like GitHub Copilot), configure them like this:
+
+```json
+{
+  "mcp_servers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Or use the CLI:
+
+```bash
+loco mcp add-json github '{"type":"http","url":"https://api.githubcopilot.com/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN"}}'
+```
+
+**Note**: HTTP transport requires `aiohttp`. Install it with:
+```bash
+pip install aiohttp
+# or
+pip install 'loco[mcp-http]'
 ```
 
 Then start loco normally:

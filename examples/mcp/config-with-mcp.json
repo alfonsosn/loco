@@ -16,10 +16,12 @@
   },
   "mcp_servers": {
     "filesystem": {
+      "type": "command",
       "command": ["npx"],
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/projects"]
     },
     "github": {
+      "type": "command",
       "command": ["npx"],
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
@@ -27,10 +29,18 @@
       }
     },
     "postgres": {
+      "type": "command",
       "command": ["uvx"],
       "args": ["mcp-server-postgres"],
       "env": {
         "DATABASE_URL": "${DATABASE_URL}"
+      }
+    },
+    "github-copilot": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_COPILOT_TOKEN}"
       }
     }
   }

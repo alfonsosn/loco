@@ -28,12 +28,34 @@ class ToolsConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """Configuration for an external MCP server."""
+    """Configuration for an external MCP server.
+    
+    Supports two types:
+    - command: Local process-based MCP server (default)
+    - http: HTTP-based MCP server with optional headers
+    """
 
-    command: list[str]
+    # Type discriminator
+    type: str = Field(default="command", pattern="^(command|http)$")
+    
+    # Command-based config (type="command")
+    command: list[str] | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     cwd: str | None = None
+    
+    # HTTP-based config (type="http")
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    
+    def model_post_init(self, __context: Any) -> None:
+        """Validate config based on type."""
+        if self.type == "command":
+            if not self.command:
+                raise ValueError("Command-based MCP server must have 'command' field")
+        elif self.type == "http":
+            if not self.url:
+                raise ValueError("HTTP-based MCP server must have 'url' field")
 
 
 class Config(BaseModel):
@@ -49,7 +71,7 @@ class Config(BaseModel):
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     hooks: dict[str, Any] = Field(default_factory=dict)
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    mcp_servers: dict[str, dict[str, Any] | MCPServerConfig] = Field(default_factory=dict)
     system_prompt: str | None = None
 
 

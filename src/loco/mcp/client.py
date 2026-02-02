@@ -222,3 +222,46 @@ class MCPClient:
         """Create an MCP client that spawns a server process."""
         transport = ProcessTransport(command, cwd)
         return cls(transport, client_name, client_version)
+
+    @classmethod
+    def from_http(
+        cls,
+        url: str,
+        headers: dict[str, str] | None = None,
+        client_name: str = "loco",
+        client_version: str = "0.1.0",
+    ) -> "MCPClient":
+        """Create an MCP client that connects to an HTTP-based MCP server."""
+        from loco.mcp.transport import HTTPTransport
+        transport = HTTPTransport(url, headers)
+        return cls(transport, client_name, client_version)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        client_name: str = "loco",
+        client_version: str = "0.1.0",
+    ) -> "MCPClient":
+        """Create an MCP client from a configuration dictionary.
+        
+        Supports both command-based and HTTP-based configurations.
+        """
+        config_type = config.get("type", "command")
+        
+        if config_type == "http":
+            url = config.get("url")
+            if not url:
+                raise ValueError("HTTP MCP server config must have 'url' field")
+            headers = config.get("headers", {})
+            return cls.from_http(url, headers, client_name, client_version)
+        else:  # command
+            command = config.get("command")
+            if not command:
+                raise ValueError("Command-based MCP server config must have 'command' field")
+            args = config.get("args", [])
+            cwd = config.get("cwd")
+            
+            # Combine command and args
+            full_command = command + args if args else command
+            return cls.from_command(full_command, cwd, client_name, client_version)

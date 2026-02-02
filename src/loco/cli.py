@@ -922,5 +922,304 @@ def mcp_server() -> None:
     asyncio.run(server.run())
 
 
+@main.group()
+def mcp() -> None:
+    """Manage MCP servers."""
+    pass
+
+
+
+@mcp.command()
+@click.argument("name")
+@click.argument("json_config")
+def add_json(name: str, json_config: str) -> None:
+    """Add an MCP server from JSON configuration.
+
+    Supports both command-based and HTTP-based MCP servers.
+    
+    Command-based example:
+      loco mcp add-json filesystem '{"type":"command","command":["npx","-y","@modelcontextprotocol/server-filesystem","/path"]}'
+    
+    HTTP-based example:
+      loco mcp add-json github '{"type":"http","url":"https://api.githubcopilot.com/mcp","headers":{"Authorization":"Bearer TOKEN"}}'
+    """
+    import json
+    from loco.config import load_config, save_config, MCPServerConfig
+
+    try:
+        config_data = json.loads(json_config)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"Invalid JSON: {e}")
+
+    # Validate config using Pydantic model
+    try:
+        server_config = MCPServerConfig(**config_data)
+    except Exception as e:
+        raise click.ClickException(f"Invalid MCP server configuration: {e}")
+
+    # Load current config
+    config = load_config()
+
+    # Add new MCP server (store as dict)
+    config.mcp_servers[name] = server_config.model_dump(exclude_none=True)
+
+    # Save updated config
+    save_config(config)
+
+    config_type = server_config.type
+    click.echo(f"Added {config_type}-based MCP server '{name}' to configuration")
+
+
 if __name__ == "__main__":
     main()
+
+
+@mcp.command(name="list")
+def list_servers() -> None:
+    """List all configured MCP servers."""
+    from loco.config import load_config
+    from rich.table import Table
+    
+    console = get_console()
+    config = load_config()
+    
+    if not config.mcp_servers:
+        console.print("[yellow]No MCP servers configured.[/yellow]")
+        console.print("\nAdd one with: [cyan]loco mcp add-json <name> '<json-config>'[/cyan]")
+        return
+    
+    table = Table(title="Configured MCP Servers", show_header=True)
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Type", style="magenta")
+    table.add_column("Details", style="white")
+    
+    for name, server_config in config.mcp_servers.items():
+        if isinstance(server_config, dict):
+            config_type = server_config.get('type', 'command')
+            
+            if config_type == 'http':
+                url = server_config.get('url', 'N/A')
+                headers_count = len(server_config.get('headers', {}))
+                details = f"{url} ({headers_count} header(s))"
+            else:
+                cmd = server_config.get('command', ['N/A'])
+                cmd_str = ' '.join(cmd[:2]) if isinstance(cmd, list) else str(cmd)
+                args = server_config.get('args', [])
+                if args:
+                    cmd_str += f" +{len(args)} arg(s)"
+                details = cmd_str
+        else:
+            config_type = server_config.type
+            details = "Unknown"
+        
+        table.add_row(name, config_type.upper(), details)
+    
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(config.mcp_servers)} server(s)[/dim]")
+
+
+@mcp.command()
+@click.argument("name")
+def remove(name: str) -> None:
+    """Remove an MCP server from configuration."""
+    from loco.config import load_config, save_config
+    
+    console = get_console()
+    config = load_config()
+    
+    if name not in config.mcp_servers:
+        raise click.ClickException(f"MCP server '{name}' not found")
+    
+    # Get server type for confirmation message
+    server_config = config.mcp_servers[name]
+    if isinstance(server_config, dict):
+        config_type = server_config.get('type', 'command')
+    else:
+        config_type = server_config.type
+    
+    # Remove the server
+    del config.mcp_servers[name]
+    save_config(config)
+    
+    console.print(f"[green]✓[/green] Removed {config_type}-based MCP server '{name}'")
+
+
+@mcp.command()
+@click.argument("name")
+def show(name: str) -> None:
+    """Show detailed configuration for an MCP server."""
+    import json
+    from loco.config import load_config
+    
+    console = get_console()
+    config = load_config()
+    
+    if name not in config.mcp_servers:
+        raise click.ClickException(f"MCP server '{name}' not found")
+    
+    server_config = config.mcp_servers[name]
+    
+    # Convert to dict if needed
+    if not isinstance(server_config, dict):
+        config_dict = server_config.model_dump(exclude_none=True)
+    else:
+        config_dict = server_config.copy()
+    
+    # Mask sensitive data in headers
+    if 'headers' in config_dict and config_dict['headers']:
+        masked_headers = {}
+        for key, value in config_dict['headers'].items():
+            if any(sensitive in key.lower() for sensitive in ['auth', 'token', 'key', 'secret', 'password']):
+                masked_headers[key] = value[:10] + '...' if len(value) > 10 else '***'
+            else:
+                masked_headers[key] = value
+        config_dict['headers'] = masked_headers
+    
+    console.print(f"\n[bold cyan]MCP Server: {name}[/bold cyan]")
+    console.print(json.dumps(config_dict, indent=2))
+
+
+@mcp.command()
+@click.argument("name", required=False)
+@click.option("--timeout", default=10, help="Timeout in seconds for initialization")
+def test(name: str | None, timeout: int) -> None:
+    """Test connectivity and initialization of MCP server(s).
+    
+    If no name is provided, tests all configured servers.
+    """
+    import asyncio
+    from loco.config import load_config
+    from loco.mcp.loader import load_mcp_client
+    
+    console = get_console()
+    config = load_config()
+    
+    if not config.mcp_servers:
+        console.print("[yellow]No MCP servers configured.[/yellow]")
+        return
+    
+    # Determine which servers to test
+    if name:
+        if name not in config.mcp_servers:
+            raise click.ClickException(f"MCP server '{name}' not found")
+        servers_to_test = {name: config.mcp_servers[name]}
+    else:
+        servers_to_test = config.mcp_servers
+    
+    async def test_server(server_name: str) -> tuple[str, bool, str]:
+        """Test a single server. Returns (name, success, message)."""
+        try:
+            client = load_mcp_client(config, server_name)
+            if client is None:
+                return (server_name, False, "Failed to create client")
+            
+            # Try to initialize
+            result = await asyncio.wait_for(
+                client.initialize(),
+                timeout=timeout
+            )
+            
+            # Try to list tools
+            tools = await asyncio.wait_for(
+                client.list_tools(),
+                timeout=timeout
+            )
+            
+            await client.close()
+            
+            return (server_name, True, f"OK - {len(tools)} tool(s) available")
+        except asyncio.TimeoutError:
+            return (server_name, False, f"Timeout after {timeout}s")
+        except Exception as e:
+            return (server_name, False, str(e))
+    
+    async def test_all():
+        tasks = [test_server(name) for name in servers_to_test.keys()]
+        return await asyncio.gather(*tasks)
+    
+    console.print(f"[dim]Testing {len(servers_to_test)} server(s)...[/dim]\n")
+    
+    results = asyncio.run(test_all())
+    
+    for server_name, success, message in results:
+        if success:
+            console.print(f"[green]✓[/green] {server_name}: {message}")
+        else:
+            console.print(f"[red]✗[/red] {server_name}: {message}")
+
+
+@mcp.command()
+@click.argument("name", required=False)
+@click.option("--timeout", default=10, help="Timeout in seconds")
+def tools(name: str | None, timeout: int) -> None:
+    """List available tools from MCP server(s).
+    
+    If no name is provided, lists tools from all configured servers.
+    """
+    import asyncio
+    from loco.config import load_config
+    from loco.mcp.loader import load_mcp_client
+    from rich.table import Table
+    
+    console = get_console()
+    config = load_config()
+    
+    if not config.mcp_servers:
+        console.print("[yellow]No MCP servers configured.[/yellow]")
+        return
+    
+    # Determine which servers to query
+    if name:
+        if name not in config.mcp_servers:
+            raise click.ClickException(f"MCP server '{name}' not found")
+        servers_to_query = {name: config.mcp_servers[name]}
+    else:
+        servers_to_query = config.mcp_servers
+    
+    async def get_tools(server_name: str):
+        """Get tools from a single server."""
+        try:
+            client = load_mcp_client(config, server_name)
+            if client is None:
+                return (server_name, None, "Failed to create client")
+            
+            await asyncio.wait_for(client.initialize(), timeout=timeout)
+            tools = await asyncio.wait_for(client.list_tools(), timeout=timeout)
+            await client.close()
+            
+            return (server_name, tools, None)
+        except asyncio.TimeoutError:
+            return (server_name, None, f"Timeout after {timeout}s")
+        except Exception as e:
+            return (server_name, None, str(e))
+    
+    async def get_all_tools():
+        tasks = [get_tools(name) for name in servers_to_query.keys()]
+        return await asyncio.gather(*tasks)
+    
+    console.print(f"[dim]Querying {len(servers_to_query)} server(s)...[/dim]\n")
+    
+    results = asyncio.run(get_all_tools())
+    
+    # Display results
+    for server_name, tools, error in results:
+        if error:
+            console.print(f"[red]✗[/red] {server_name}: {error}")
+            continue
+        
+        if not tools:
+            console.print(f"[yellow]⚠[/yellow] {server_name}: No tools available")
+            continue
+        
+        table = Table(title=f"Tools from '{server_name}'", show_header=True)
+        table.add_column("Tool", style="cyan", no_wrap=True)
+        table.add_column("Description", style="white")
+        
+        for tool in tools:
+            description = tool.description[:80] + "..." if len(tool.description) > 80 else tool.description
+            table.add_row(tool.name, description)
+        
+        console.print(table)
+        console.print()
+
+
