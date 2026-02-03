@@ -27,6 +27,13 @@ class ToolsConfig(BaseModel):
     require_confirmation: bool = False
 
 
+class RewindConfig(BaseModel):
+    """Configuration for REWIND feature."""
+
+    enabled: bool = True
+    max_file_size: int = 10 * 1024 * 1024  # 10MB default
+
+
 class ModelCostConfig(BaseModel):
     """Cost configuration for a model (per 1M tokens)."""
 
@@ -78,6 +85,7 @@ class Config(BaseModel):
     model_costs: dict[str, ModelCostConfig] = Field(default_factory=dict)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    rewind: RewindConfig = Field(default_factory=RewindConfig)
     hooks: dict[str, Any] = Field(default_factory=dict)
     mcp_servers: dict[str, dict[str, Any] | MCPServerConfig] = Field(default_factory=dict)
     system_prompt: str | None = None
