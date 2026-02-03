@@ -496,6 +496,35 @@ class RewindManager:
 
         return True, restored_files, conflicts
 
+    def rewind_conversation_only(self, turn_number: int) -> bool:
+        """Rewind state without restoring files.
+
+        This only updates the rewind state to the target turn, keeping
+        all file changes as they are. Useful when the user wants to
+        restart the conversation from an earlier point but keep the
+        current file state.
+
+        Args:
+            turn_number: Turn number to rewind to (0 means before any changes)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if turn_number < 0 or turn_number > self.state.current_turn:
+            return False
+
+        # Update state without touching files
+        self.state.checkpoints = [
+            cp for cp in self.state.checkpoints
+            if cp.turn_number <= turn_number
+        ]
+        self.state.current_turn = turn_number
+
+        # Persist updated state
+        self.persist()
+
+        return True
+
     def get_message_index_for_turn(self, turn_number: int) -> int | None:
         """Get the message index that corresponds to the end of a turn.
 

@@ -815,33 +815,73 @@ Format the summary as a clear, organized narrative that I can use to continue th
             return True
 
         if target_turn == rewind_manager.state.current_turn:
-            console.print("[dim]Already at turn {target_turn}.[/dim]")
+            console.print(f"[dim]Already at turn {target_turn}.[/dim]")
             return True
 
-        # Check for conflicts
-        conflicts = rewind_manager.validate_before_rewind(target_turn)
-        if conflicts:
-            console.print("[yellow]Warning: Some files have been modified outside of loco:[/yellow]")
-            for conflict in conflicts[:5]:
-                console.print(f"  • {conflict.path}")
-            if len(conflicts) > 5:
-                console.print(f"  ... and {len(conflicts) - 5} more")
+        # Check if there are file changes to potentially restore
+        files_changed = rewind_manager.get_files_modified_after_turn(target_turn)
+        restore_files = False
 
-            console.print("\n[bold]Overwrite these files?[/bold] [dim](yes/no)[/dim]")
+        if files_changed:
+            # Show what files would be affected
+            unique_files = set(change.path for change in files_changed)
+            console.print(f"\n[bold]Files modified since turn {target_turn}:[/bold]")
+            for path in list(unique_files)[:5]:
+                console.print(f"  • {path}")
+            if len(unique_files) > 5:
+                console.print(f"  ... and {len(unique_files) - 5} more")
+
+            # Ask if user wants to restore files
+            console.print("\n[bold]Also restore files to their state at turn " + str(target_turn) + "?[/bold]")
+            console.print("[dim]  yes - Rewind conversation AND restore files[/dim]")
+            console.print("[dim]  no  - Rewind conversation only, keep current files[/dim]")
+
             response, _ = console.get_input("> ")
-            if not response or response.lower() not in ["yes", "y"]:
-                console.print("[dim]Rewind cancelled.[/dim]")
-                return True
+            restore_files = response and response.lower() in ["yes", "y"]
+
+            # If restoring files, check for conflicts
+            if restore_files:
+                conflicts = rewind_manager.validate_before_rewind(target_turn)
+                if conflicts:
+                    console.print("\n[yellow]Warning: Some files have been modified outside of loco:[/yellow]")
+                    for conflict in conflicts[:5]:
+                        console.print(f"  • {conflict.path}")
+                    if len(conflicts) > 5:
+                        console.print(f"  ... and {len(conflicts) - 5} more")
+
+                    console.print("\n[bold]Overwrite these files anyway?[/bold] [dim](yes/no)[/dim]")
+                    response, _ = console.get_input("> ")
+                    if not response or response.lower() not in ["yes", "y"]:
+                        console.print("[dim]Rewind cancelled.[/dim]")
+                        return True
 
         # Perform rewind
-        console.print(f"\n[bold]Rewinding to turn {target_turn}...[/bold]")
-        success, restored_files, _ = rewind_manager.rewind_to_turn(target_turn, force=True)
+        if restore_files:
+            console.print(f"\n[bold]Rewinding to turn {target_turn} (restoring files)...[/bold]")
+            success, restored_files_list, _ = rewind_manager.rewind_to_turn(target_turn, force=True)
 
-        if success:
-            for msg in restored_files:
-                console.print(f"  {msg}")
+            if success:
+                for msg in restored_files_list:
+                    console.print(f"  {msg}")
+            else:
+                console.print("[red]Rewind failed.[/red]")
+                return True
+        else:
+            console.print(f"\n[bold]Rewinding conversation to turn {target_turn}...[/bold]")
+            success = rewind_manager.rewind_conversation_only(target_turn)
 
-            # Truncate conversation
+            if not success:
+                console.print("[red]Rewind failed.[/red]")
+                return True
+
+        # Always truncate conversation to the target turn
+        if target_turn == 0:
+            # Rewind to beginning - clear all messages except system
+            system_msg = next((m for m in conversation.messages if m.role == "system"), None)
+            conversation.messages = []
+            if system_msg:
+                conversation.messages.append(system_msg)
+        else:
             message_index = rewind_manager.get_message_index_for_turn(target_turn)
             if message_index is not None and message_index < len(conversation.messages):
                 # Keep system message and truncate the rest
@@ -850,11 +890,15 @@ Format the summary as a clear, organized narrative that I can use to continue th
                 if system_msg and (not conversation.messages or conversation.messages[0].role != "system"):
                     conversation.messages.insert(0, system_msg)
 
-            console.print(f"\n[green]✓[/green] Rewound to turn {target_turn}")
+        # Show success message
+        console.print(f"\n[green]✓[/green] Rewound to turn {target_turn}")
+        if restore_files:
             if target_turn == 0:
-                console.print("[dim]All file changes have been undone.[/dim]")
+                console.print("[dim]Conversation cleared and all file changes undone.[/dim]")
+            else:
+                console.print("[dim]Conversation and files restored.[/dim]")
         else:
-            console.print("[red]Rewind failed.[/red]")
+            console.print("[dim]Conversation rewound. File changes kept as-is.[/dim]")
 
         return True
 
