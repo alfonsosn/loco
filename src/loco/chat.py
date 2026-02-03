@@ -266,19 +266,30 @@ def stream_response(
     # Track usage stats if available
     if usage_data:
         from loco.usage import UsageStats, SessionUsage
-        
+
         # Initialize session usage if needed
         if conversation.usage is None:
             conversation.usage = SessionUsage()
-        
-        # Add this call's usage
-        stat = UsageStats.from_response(
-            model=conversation.model,
-            usage_data=usage_data if isinstance(usage_data, dict) else {
+
+        # Normalize usage data to dict with only the fields we need
+        # This filters out unexpected fields like image_tokens that OpenAI includes
+        if isinstance(usage_data, dict):
+            usage_dict = {
+                "prompt_tokens": usage_data.get("prompt_tokens", 0),
+                "completion_tokens": usage_data.get("completion_tokens", 0),
+                "total_tokens": usage_data.get("total_tokens", 0),
+            }
+        else:
+            usage_dict = {
                 "prompt_tokens": getattr(usage_data, "prompt_tokens", 0),
                 "completion_tokens": getattr(usage_data, "completion_tokens", 0),
                 "total_tokens": getattr(usage_data, "total_tokens", 0),
-            },
+            }
+
+        # Add this call's usage
+        stat = UsageStats.from_response(
+            model=conversation.model,
+            usage_data=usage_dict,
             config=conversation.config,
         )
         conversation.usage.add(stat)
@@ -286,13 +297,21 @@ def stream_response(
         # Track for cost profiling
         tracker = get_tracker()
         if tracker.enabled:
+            # Extract cache tokens, handling both dict and object formats
+            if isinstance(usage_data, dict):
+                cache_read = usage_data.get('cache_read_input_tokens', 0) or 0
+                cache_write = usage_data.get('cache_creation_input_tokens', 0) or 0
+            else:
+                cache_read = getattr(usage_data, 'cache_read_input_tokens', 0) or 0
+                cache_write = getattr(usage_data, 'cache_creation_input_tokens', 0) or 0
+
             tracker.track_call(
                 model=conversation.model,
                 input_tokens=stat.prompt_tokens,
                 output_tokens=stat.completion_tokens,
                 cost=stat.cost,
-                cache_read_tokens=getattr(usage_data, 'cache_read_input_tokens', 0) or 0,
-                cache_write_tokens=getattr(usage_data, 'cache_creation_input_tokens', 0) or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
             )
 
     # Yield tool calls
