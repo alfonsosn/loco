@@ -278,7 +278,8 @@ def stream_response(
                 "prompt_tokens": getattr(usage_data, "prompt_tokens", 0),
                 "completion_tokens": getattr(usage_data, "completion_tokens", 0),
                 "total_tokens": getattr(usage_data, "total_tokens", 0),
-            }
+            },
+            config=conversation.config,
         )
         conversation.usage.add(stat)
 
