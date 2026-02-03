@@ -10,6 +10,8 @@ import litellm
 from rich.console import Console
 from rich.markdown import Markdown
 
+from loco.telemetry import get_tracker, track_operation, OperationType
+
 # Drop unsupported params for models that don't support them (e.g., tool_choice on Bedrock Mistral)
 litellm.drop_params = True
 
@@ -178,6 +180,7 @@ def stream_response(
         "messages": conversation.get_messages(),
         "stream": True,
         "stream_options": {"include_usage": True},  # Request usage data in stream
+        "drop_params": True,  # Automatically drop unsupported params for each provider
     }
 
     # Add provider-specific config
@@ -275,9 +278,22 @@ def stream_response(
                 "prompt_tokens": getattr(usage_data, "prompt_tokens", 0),
                 "completion_tokens": getattr(usage_data, "completion_tokens", 0),
                 "total_tokens": getattr(usage_data, "total_tokens", 0),
-            }
+            },
+            config=conversation.config,
         )
         conversation.usage.add(stat)
+
+        # Track for cost profiling
+        tracker = get_tracker()
+        if tracker.enabled:
+            tracker.track_call(
+                model=conversation.model,
+                input_tokens=stat.prompt_tokens,
+                output_tokens=stat.completion_tokens,
+                cost=stat.cost,
+                cache_read_tokens=getattr(usage_data, 'cache_read_input_tokens', 0) or 0,
+                cache_write_tokens=getattr(usage_data, 'cache_creation_input_tokens', 0) or 0,
+            )
 
     # Yield tool calls
     for tc_data in tool_calls_data.values():
@@ -291,6 +307,18 @@ def stream_response(
             name=tc_data["function"]["name"],
             arguments=arguments,
         )
+
+
+def _get_operation_type_for_tool(tool_name: str) -> OperationType:
+    """Map tool name to operation type."""
+    mapping = {
+        "grep": OperationType.SEARCH_GREP,
+        "glob": OperationType.SEARCH_GLOB,
+        "read": OperationType.READ_FILE,
+        "edit": OperationType.GENERATION_EDIT,
+        "write": OperationType.GENERATION_CODE,
+    }
+    return mapping.get(tool_name.lower(), OperationType.UNKNOWN)
 
 
 def _display_usage_stats(conversation: Conversation, console: Console, turn_stats_only: bool = False) -> None:
@@ -342,11 +370,23 @@ def chat_turn(
     from loco.ui.components import StreamingMarkdown, Spinner
 
     conversation.add_user_message(user_input)
-    
+
     # Track API calls at the start to know which are new
     initial_call_count = conversation.usage.get_call_count() if conversation.usage else 0
 
+    # Track iteration for operation type attribution
+    iteration = 0
+
     while True:
+        # Determine operation type for this LLM call:
+        # - First iteration with tools: SYSTEM_ROUTING (deciding what to do)
+        # - Subsequent iterations: SYSTEM_SYNTHESIS (combining tool results)
+        # - No tools: EXPLANATION (direct response)
+        if tools:
+            llm_op_type = OperationType.SYSTEM_ROUTING if iteration == 0 else OperationType.SYSTEM_SYNTHESIS
+        else:
+            llm_op_type = OperationType.EXPLANATION
+        iteration += 1
         # Stream the response
         tool_calls: list[ToolCall] = []
         content_buffer = ""
@@ -357,18 +397,19 @@ def chat_turn(
         spinner.__enter__()
 
         try:
-            with StreamingMarkdown(console) as stream:
-                for item in stream_response(conversation, tools, console):
-                    # Hide spinner on first content
-                    if first_token:
-                        spinner.__exit__(None, None, None)
-                        first_token = False
+            with track_operation(llm_op_type):
+                with StreamingMarkdown(console) as stream:
+                    for item in stream_response(conversation, tools, console):
+                        # Hide spinner on first content
+                        if first_token:
+                            spinner.__exit__(None, None, None)
+                            first_token = False
 
-                    if isinstance(item, str):
-                        content_buffer += item
-                        stream.append(item)
-                    elif isinstance(item, ToolCall):
-                        tool_calls.append(item)
+                        if isinstance(item, str):
+                            content_buffer += item
+                            stream.append(item)
+                        elif isinstance(item, ToolCall):
+                            tool_calls.append(item)
         finally:
             # Ensure spinner is closed if no content received
             if first_token:
@@ -408,7 +449,9 @@ def chat_turn(
             try:
                 # Create a modified ToolCall with potentially updated arguments
                 modified_tc = ToolCall(id=tc.id, name=tc.name, arguments=tool_input)
-                result = tool_executor(modified_tc)
+                op_type = _get_operation_type_for_tool(tc.name)
+                with track_operation(op_type):
+                    result = tool_executor(modified_tc)
                 success = True
             except Exception as e:
                 result = f"Error: {e}"

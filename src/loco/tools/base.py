@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from loco.telemetry import track_tool, get_tracker
+
 
 class Tool(ABC):
     """Base class for all tools."""
@@ -75,7 +77,8 @@ class ToolRegistry:
             return f"Error: Unknown tool '{name}'"
 
         try:
-            return tool.execute(**arguments)
+            with track_tool(name):
+                return tool.execute(**arguments)
         except Exception as e:
             return f"Error executing {name}: {e}"
 

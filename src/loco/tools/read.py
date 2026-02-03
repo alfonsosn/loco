@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from loco.tools.base import Tool, tool_registry
+from loco.telemetry import get_tracker
 
 
 class ReadTool(Tool):
@@ -75,6 +76,9 @@ class ReadTool(Tool):
         start_line = max(0, min(start_line, total_lines))
         end_line = min(start_line + max_lines, total_lines)
         selected_lines = lines[start_line:end_line]
+
+        # Track file read for duplicate detection
+        get_tracker().track_file_read(str(path))
 
         # Format with line numbers
         result_lines = []

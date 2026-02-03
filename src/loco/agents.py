@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from loco.config import Config, get_config_dir
+from loco.telemetry import track_agent, OperationType, track_operation
 
 
 @dataclass
@@ -282,18 +283,31 @@ Complete this task and provide a clear summary of what you found or accomplished
     console.print(f"\n[bold cyan]Agent: {agent.name}[/bold cyan]")
     console.print(f"[dim]Task: {task}[/dim]\n")
 
+    # Determine operation type based on agent name
+    op_type = OperationType.UNKNOWN
+    if "explore" in agent.name.lower():
+        op_type = OperationType.AGENT_EXPLORATION
+    elif "research" in agent.name.lower():
+        op_type = OperationType.AGENT_RESEARCH
+    elif "rails" in agent.name.lower():
+        op_type = OperationType.AGENT_RAILS
+    else:
+        op_type = OperationType.AGENT_OVERHEAD
+
     # Run the conversation
-    try:
-        chat_turn(
-            conversation=conversation,
-            user_input=task,
-            tools=filtered_tools if filtered_tools else None,
-            tool_executor=tool_executor,
-            console=console,
-            hook_config=hook_config,
-        )
-    except Exception as e:
-        return f"Agent error: {e}"
+    with track_agent(agent.name):
+        with track_operation(op_type):
+            try:
+                chat_turn(
+                    conversation=conversation,
+                    user_input=task,
+                    tools=filtered_tools if filtered_tools else None,
+                    tool_executor=tool_executor,
+                    console=console,
+                    hook_config=hook_config,
+                )
+            except Exception as e:
+                return f"Agent error: {e}"
 
     # Get the final response
     for msg in reversed(conversation.messages):

@@ -34,6 +34,7 @@ from loco.git import (
     get_commit_history, get_branch_diff, get_current_branch,
     create_commit, stage_all_changes,
 )
+from loco.telemetry import get_tracker, CostTracker, CostProfile
 
 
 # Track current session ID for auto-save
@@ -41,6 +42,54 @@ _current_session_id: str | None = None
 
 # Track active command for current conversation
 _active_command: Command | None = None
+
+
+def _display_cost_profile(console: Console, profile: CostProfile) -> None:
+    """Display cost profile dashboard."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from datetime import datetime
+
+    duration = datetime.now() - profile.start_time
+    duration_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
+
+    # Header panel
+    header = f"""[bold]Session:[/bold] {profile.session_id}  [bold]Duration:[/bold] {duration_str}
+[bold]Total Cost:[/bold] ${profile.total_cost:.4f}
+[bold]Tokens:[/bold] In: {profile.total_input_tokens:,}  Out: {profile.total_output_tokens:,}  Cache Read: {profile.total_cache_read:,}  Cache Write: {profile.total_cache_write:,}"""
+
+    console.print(Panel(header, title="LOCO Cost Profile", border_style="blue"))
+
+    # Cost by operation
+    console.print("\n[bold]Cost by Operation:[/bold]")
+    op_costs = profile.cost_by_operation()
+    total = profile.total_cost or 1  # avoid division by zero
+
+    for op, cost in list(op_costs.items())[:8]:  # top 8
+        pct = (cost / total) * 100
+        bar_len = int(pct / 5)  # scale to ~20 chars max
+        bar = "[green]" + "█" * bar_len + "░" * (20 - bar_len) + "[/green]"
+        console.print(f"  {op:24} {bar} ${cost:.4f} ({pct:.1f}%)")
+
+    # Cost by agent
+    agent_costs = profile.cost_by_agent()
+    if len(agent_costs) > 1:  # only show if multiple agents
+        console.print("\n[bold]Cost by Agent:[/bold]")
+        for agent, cost in list(agent_costs.items())[:5]:
+            pct = (cost / total) * 100
+            console.print(f"  {agent:24} ${cost:.4f} ({pct:.1f}%)")
+
+    # Duplicate file reads
+    duplicates = profile.duplicate_file_reads()
+    if duplicates:
+        console.print("\n[bold yellow]Duplicate File Reads (potential waste):[/bold yellow]")
+        wasted = 0
+        for path, count in duplicates[:5]:
+            console.print(f"  {path}: read {count}x")
+            wasted += count - 1
+        console.print(f"  [yellow]Total duplicate reads: {wasted}[/yellow]")
+
+    console.print(f"\n[dim]LLM calls tracked: {len(profile.calls)}[/dim]")
 
 
 def handle_slash_command(
@@ -74,6 +123,7 @@ def handle_slash_command(
   [cyan]/stats[/cyan]            Show token usage and cost statistics
   [cyan]/context[/cyan]          Show context window usage and estimates
   [cyan]/plan[/cyan] <task>      Create a step-by-step plan for a task
+  [cyan]/profile[/cyan] [on|off|save|report]  Cost profiling dashboard
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
 
@@ -591,6 +641,55 @@ Format the summary as a clear, organized narrative that I can use to continue th
 
         return True
 
+    elif cmd == "/profile":
+        tracker = get_tracker()
+        args_list = args.split() if args else []
+
+        if args_list and args_list[0] == "on":
+            tracker.enable()
+            console.print("[green]Cost profiling enabled[/green]")
+            return True
+        elif args_list and args_list[0] == "off":
+            tracker.disable()
+            console.print("[yellow]Cost profiling disabled[/yellow]")
+            return True
+        elif args_list and args_list[0] == "save":
+            path = tracker.save_profile(Path.home() / ".config" / "loco" / "profiles")
+            if path:
+                console.print(f"[green]Profile saved to {path}[/green]")
+            return True
+        elif args_list and args_list[0] == "report":
+            from loco.telemetry import generate_report
+            profile = tracker.profile
+            if profile is None:
+                console.print("[yellow]No profile data[/yellow]")
+                return True
+
+            report = generate_report(profile)
+
+            # Save to file if path provided
+            if len(args_list) > 1:
+                path = Path(args_list[1])
+                path.write_text(report)
+                console.print(f"[green]Report saved to {path}[/green]")
+            else:
+                console.print(report)
+            return True
+
+        if not tracker.enabled:
+            console.print("[yellow]Cost profiling is not enabled.[/yellow]")
+            console.print("Run with --profile flag or use /profile on")
+            return True
+
+        profile = tracker.profile
+        if profile is None or not profile.calls:
+            console.print("[yellow]No data yet. Make some LLM calls first.[/yellow]")
+            return True
+
+        # Display dashboard
+        _display_cost_profile(console, profile)
+        return True
+
     elif cmd == "/config":
         console.print(f"[dim]Config file: {get_config_path()}[/dim]")
         return True
@@ -658,9 +757,14 @@ def tool_executor(tool_call: ToolCall) -> str:
     is_flag=True,
     help="Start in bash mode (use Shift+Tab to cycle modes)",
 )
+@click.option(
+    "--profile",
+    is_flag=True,
+    help="Enable cost profiling",
+)
 @click.version_option(version=__version__)
 @click.pass_context
-def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> None:
+def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool, profile: bool) -> None:
     """Loco - LLM Coding Assistant CLI.
 
     An AI-powered coding assistant that works with any OpenAI-compatible LLM.
@@ -680,6 +784,11 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool) -> 
     except Exception as e:
         click.echo(f"Error loading config: {e}", err=True)
         sys.exit(1)
+
+    # Enable profiling if flag is set
+    if profile:
+        tracker = get_tracker()
+        tracker.enable()
 
     # Change working directory if specified
     if cwd:
