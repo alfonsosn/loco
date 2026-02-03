@@ -27,6 +27,13 @@ class ToolsConfig(BaseModel):
     require_confirmation: bool = False
 
 
+class ModelCostConfig(BaseModel):
+    """Cost configuration for a model (per 1M tokens)."""
+
+    input: float = 0.0
+    output: float = 0.0
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for an external MCP server.
     
@@ -68,6 +75,7 @@ class Config(BaseModel):
         "sonnet": "bedrock/us.anthropic.claude-sonnet-4-20250514",
         "local": "ollama/llama3",
     })
+    model_costs: dict[str, ModelCostConfig] = Field(default_factory=dict)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     hooks: dict[str, Any] = Field(default_factory=dict)
@@ -187,3 +195,36 @@ def get_provider_config(model: str, config: Config) -> dict[str, Any]:
     result.update(provider_config.extra)
 
     return result
+
+
+def get_model_cost(model: str, config: Config) -> tuple[float, float] | None:
+    """Get cost configuration for a model from config.
+
+    Looks up model costs by:
+    1. Direct model alias match (e.g., "qwen-coder")
+    2. Reverse lookup - find alias for full model string, then get cost
+
+    Args:
+        model: Model string (alias or full LiteLLM string)
+        config: Config object
+
+    Returns:
+        Tuple of (input_cost, output_cost) per 1M tokens, or None if not configured
+    """
+    # Direct lookup by alias
+    if model in config.model_costs:
+        cost = config.model_costs[model]
+        return (cost.input, cost.output)
+
+    # Reverse lookup: find which alias maps to this model string
+    for alias, full_model in config.models.items():
+        if full_model == model and alias in config.model_costs:
+            cost = config.model_costs[alias]
+            return (cost.input, cost.output)
+
+    # Partial match on model string (for cases like "claude-sonnet" matching config key)
+    for alias, cost in config.model_costs.items():
+        if alias in model.lower():
+            return (cost.input, cost.output)
+
+    return None
