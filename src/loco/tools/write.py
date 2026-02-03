@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from loco.tools.base import Tool, tool_registry
+from loco.rewind import get_rewind_manager, ChangeType
 
 
 class WriteTool(Tool):
@@ -45,6 +46,11 @@ class WriteTool(Tool):
         if not path.is_absolute():
             path = Path.cwd() / path
 
+        # Capture state before write for REWIND
+        rewind_manager = get_rewind_manager()
+        if rewind_manager:
+            rewind_manager.capture_before(str(path))
+
         # Create parent directories if needed
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +66,11 @@ class WriteTool(Tool):
                 f.write(content)
         except Exception as e:
             return f"Error writing file: {e}"
+
+        # Capture state after write for REWIND
+        if rewind_manager:
+            change_type = ChangeType.MODIFIED if existed else ChangeType.CREATED
+            rewind_manager.capture_after(str(path), content, change_type)
 
         # Count lines for feedback
         line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)

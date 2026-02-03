@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from loco.tools.base import Tool, tool_registry
+from loco.rewind import get_rewind_manager, ChangeType
 
 
 def generate_diff(old_string: str, new_string: str, context_lines: int = 3) -> str:
@@ -87,6 +88,11 @@ class EditTool(Tool):
         if not path.is_file():
             return f"Error: Not a file: {path}"
 
+        # Capture state before edit for REWIND
+        rewind_manager = get_rewind_manager()
+        if rewind_manager:
+            rewind_manager.capture_before(str(path))
+
         # Read current content
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -134,6 +140,10 @@ class EditTool(Tool):
                 f.write(new_content)
         except Exception as e:
             return f"Error writing file: {e}"
+
+        # Capture state after edit for REWIND
+        if rewind_manager:
+            rewind_manager.capture_after(str(path), new_content, ChangeType.MODIFIED)
 
         # Return with diff
         return f"✓ {path}\n{diff}"

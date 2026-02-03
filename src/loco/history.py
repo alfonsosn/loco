@@ -8,6 +8,7 @@ from typing import Any
 
 from loco.chat import Conversation, Message
 from loco.config import get_config_dir
+from loco.rewind import get_rewind_manager
 
 
 def get_history_dir() -> Path:
@@ -55,7 +56,7 @@ def save_conversation(
         "created_at": datetime.now().isoformat(),
         "messages": [msg.to_dict() for msg in conversation.messages],
     }
-    
+
     # Add usage data if available
     if conversation.usage:
         session_data["usage"] = conversation.usage.to_dict()
@@ -64,6 +65,11 @@ def save_conversation(
     session_file = history_dir / f"{session_id}.json"
     with open(session_file, "w") as f:
         json.dump(session_data, f, indent=2)
+
+    # Also persist rewind state if available
+    rewind_manager = get_rewind_manager()
+    if rewind_manager:
+        rewind_manager.persist()
 
     return session_id
 
@@ -159,8 +165,16 @@ def delete_session(session_id: str) -> bool:
     history_dir = get_history_dir()
     session_file = history_dir / f"{session_id}.json"
 
+    deleted = False
     if session_file.exists():
         session_file.unlink()
-        return True
+        deleted = True
 
-    return False
+    # Also clean up rewind state if it exists
+    from loco.snapshots import SnapshotStorage
+    storage = SnapshotStorage(session_id)
+    if storage.session_dir.exists():
+        storage.cleanup_full()
+        deleted = True
+
+    return deleted

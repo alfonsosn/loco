@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from loco.telemetry import get_tracker, track_operation, OperationType
+from loco.rewind import get_rewind_manager
 
 # Drop unsupported params for models that don't support them (e.g., tool_choice on Bedrock Mistral)
 litellm.drop_params = True
@@ -342,7 +343,7 @@ def _get_operation_type_for_tool(tool_name: str) -> OperationType:
 
 def _display_usage_stats(conversation: Conversation, console: Console, turn_stats_only: bool = False) -> None:
     """Display usage statistics after a turn.
-    
+
     Args:
         conversation: The conversation with usage tracking
         console: Console for output
@@ -350,17 +351,17 @@ def _display_usage_stats(conversation: Conversation, console: Console, turn_stat
     """
     if not conversation.usage or conversation.usage.get_call_count() == 0:
         return
-    
+
     usage = conversation.usage
     last_stat = usage.stats[-1]
-    
+
     # Show per-turn stats
     console.print(
         f"\n[dim]💭 {last_stat.total_tokens:,} tokens "
         f"(in: {last_stat.prompt_tokens:,}, out: {last_stat.completion_tokens:,}) "
         f"• ${last_stat.cost:.4f}[/dim]"
     )
-    
+
     # Show cumulative session stats if this isn't the first call
     if not turn_stats_only and usage.get_call_count() > 1:
         total_cost = usage.get_total_cost()
@@ -368,6 +369,40 @@ def _display_usage_stats(conversation: Conversation, console: Console, turn_stat
         console.print(
             f"[dim]📊 Session: {total_tokens:,} tokens total • ${total_cost:.4f} cumulative[/dim]"
         )
+
+
+def _extract_turn_summary(content: str, max_length: int = 100) -> str | None:
+    """Extract a brief summary from assistant response for REWIND turn tracking.
+
+    Args:
+        content: The assistant's response content
+        max_length: Maximum length of summary
+
+    Returns:
+        Brief summary string or None if content is empty
+    """
+    if not content:
+        return None
+
+    # Get first line or sentence
+    lines = content.strip().split('\n')
+    first_line = lines[0].strip()
+
+    # If it's a markdown header, use it
+    if first_line.startswith('#'):
+        first_line = first_line.lstrip('#').strip()
+
+    # Find first sentence
+    for end_char in ['.', '!', '?']:
+        idx = first_line.find(end_char)
+        if idx != -1 and idx < max_length:
+            return first_line[:idx + 1]
+
+    # Truncate if needed
+    if len(first_line) > max_length:
+        return first_line[:max_length - 3] + "..."
+
+    return first_line if first_line else None
 
 
 def chat_turn(
@@ -387,6 +422,11 @@ def chat_turn(
     4. Continuing conversation if tools were called
     """
     from loco.ui.components import StreamingMarkdown, Spinner
+
+    # Begin turn tracking for REWIND
+    rewind_manager = get_rewind_manager()
+    if rewind_manager:
+        rewind_manager.begin_turn()
 
     conversation.add_user_message(user_input)
 
@@ -434,9 +474,17 @@ def chat_turn(
             if first_token:
                 spinner.__exit__(None, None, None)
 
-        # If no tool calls, we're done - show final usage
+        # If no tool calls, we're done - show final usage and end turn
         if not tool_calls:
             _display_usage_stats(conversation, console)
+            # End turn tracking for REWIND
+            if rewind_manager:
+                # Extract a brief summary from the assistant response
+                summary = _extract_turn_summary(content_buffer) if content_buffer else None
+                rewind_manager.end_turn(
+                    message_index=len(conversation.messages),
+                    summary=summary,
+                )
             break
 
         # Execute tool calls
