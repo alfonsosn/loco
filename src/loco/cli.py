@@ -93,6 +93,30 @@ def _display_cost_profile(console: Console, profile: CostProfile) -> None:
     console.print(f"\n[dim]LLM calls tracked: {len(profile.calls)}[/dim]")
 
 
+def _replay_conversation(conversation: Conversation, console: Console) -> None:
+    """Replay the conversation history to the terminal.
+
+    This displays user messages and assistant responses in a format
+    similar to how they appear during a live conversation.
+    """
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    for msg in conversation.messages:
+        if msg.role == "system":
+            # Skip system messages
+            continue
+        elif msg.role == "user":
+            # Display user message with a prompt-like prefix
+            console.print(f"\n[bold cyan]>[/bold cyan] {msg.content}")
+        elif msg.role == "assistant" and msg.content:
+            # Display assistant response as markdown
+            console.print()
+            md = Markdown(msg.content)
+            console.console.print(md)
+        # Skip tool messages for cleaner display
+
+
 def handle_slash_command(
     command: str,
     conversation: Conversation,
@@ -890,8 +914,11 @@ Format the summary as a clear, organized narrative that I can use to continue th
                 if system_msg and (not conversation.messages or conversation.messages[0].role != "system"):
                     conversation.messages.insert(0, system_msg)
 
-        # Show success message
-        console.print(f"\n[green]✓[/green] Rewound to turn {target_turn}")
+        # Clear terminal and replay conversation up to target turn
+        console.clear()
+
+        # Show rewind status header
+        console.print(f"[green]✓[/green] Rewound to turn {target_turn}")
         if restore_files:
             if target_turn == 0:
                 console.print("[dim]Conversation cleared and all file changes undone.[/dim]")
@@ -899,6 +926,12 @@ Format the summary as a clear, organized narrative that I can use to continue th
                 console.print("[dim]Conversation and files restored.[/dim]")
         else:
             console.print("[dim]Conversation rewound. File changes kept as-is.[/dim]")
+
+        # Replay the conversation history
+        if target_turn > 0:
+            console.print("\n[dim]─── Conversation history ───[/dim]")
+            _replay_conversation(conversation, console)
+            console.print("\n[dim]─── End of history ───[/dim]\n")
 
         return True
 
