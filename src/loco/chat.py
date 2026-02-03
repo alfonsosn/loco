@@ -368,11 +368,23 @@ def chat_turn(
     from loco.ui.components import StreamingMarkdown, Spinner
 
     conversation.add_user_message(user_input)
-    
+
     # Track API calls at the start to know which are new
     initial_call_count = conversation.usage.get_call_count() if conversation.usage else 0
 
+    # Track iteration for operation type attribution
+    iteration = 0
+
     while True:
+        # Determine operation type for this LLM call:
+        # - First iteration with tools: SYSTEM_ROUTING (deciding what to do)
+        # - Subsequent iterations: SYSTEM_SYNTHESIS (combining tool results)
+        # - No tools: EXPLANATION (direct response)
+        if tools:
+            llm_op_type = OperationType.SYSTEM_ROUTING if iteration == 0 else OperationType.SYSTEM_SYNTHESIS
+        else:
+            llm_op_type = OperationType.EXPLANATION
+        iteration += 1
         # Stream the response
         tool_calls: list[ToolCall] = []
         content_buffer = ""
@@ -383,18 +395,19 @@ def chat_turn(
         spinner.__enter__()
 
         try:
-            with StreamingMarkdown(console) as stream:
-                for item in stream_response(conversation, tools, console):
-                    # Hide spinner on first content
-                    if first_token:
-                        spinner.__exit__(None, None, None)
-                        first_token = False
+            with track_operation(llm_op_type):
+                with StreamingMarkdown(console) as stream:
+                    for item in stream_response(conversation, tools, console):
+                        # Hide spinner on first content
+                        if first_token:
+                            spinner.__exit__(None, None, None)
+                            first_token = False
 
-                    if isinstance(item, str):
-                        content_buffer += item
-                        stream.append(item)
-                    elif isinstance(item, ToolCall):
-                        tool_calls.append(item)
+                        if isinstance(item, str):
+                            content_buffer += item
+                            stream.append(item)
+                        elif isinstance(item, ToolCall):
+                            tool_calls.append(item)
         finally:
             # Ensure spinner is closed if no content received
             if first_token:
