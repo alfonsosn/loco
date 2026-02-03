@@ -35,6 +35,7 @@ from loco.git import (
     create_commit, stage_all_changes,
 )
 from loco.telemetry import get_tracker, CostTracker, CostProfile
+from loco.rewind import RewindManager, set_rewind_manager, get_rewind_manager
 
 
 # Track current session ID for auto-save
@@ -124,6 +125,8 @@ def handle_slash_command(
   [cyan]/context[/cyan]          Show context window usage and estimates
   [cyan]/plan[/cyan] <task>      Create a step-by-step plan for a task
   [cyan]/profile[/cyan] [on|off|save|report]  Cost profiling dashboard
+  [cyan]/turns[/cyan]            List conversation turns (for REWIND)
+  [cyan]/rewind[/cyan] [n]       Rewind to turn N (interactive if no argument)
   [cyan]/config[/cyan]           Show configuration file path
   [cyan]/quit[/cyan]             Exit loco (or Ctrl+C)
 
@@ -153,6 +156,11 @@ def handle_slash_command(
         conversation.usage = None
         _current_session_id = None
         _active_command = None
+        # Reset rewind state
+        rewind_manager = get_rewind_manager()
+        if rewind_manager:
+            rewind_manager.cleanup()
+            set_rewind_manager(None)
         console.print("[dim]Conversation cleared.[/dim]")
         return True
 
@@ -316,7 +324,15 @@ Format the summary as a clear, organized narrative that I can use to continue th
         if loaded.usage:
             conversation.usage = loaded.usage
         _current_session_id = args
-        console.print(f"[dim]Loaded session: {args} ({len(conversation.messages)} messages)[/dim]")
+
+        # Try to load rewind state if it exists
+        loaded_rewind = RewindManager.load(args)
+        if loaded_rewind:
+            set_rewind_manager(loaded_rewind)
+            console.print(f"[dim]Loaded session: {args} ({len(conversation.messages)} messages, {loaded_rewind.state.current_turn} turns)[/dim]")
+        else:
+            set_rewind_manager(None)
+            console.print(f"[dim]Loaded session: {args} ({len(conversation.messages)} messages)[/dim]")
         return True
 
     elif cmd == "/sessions":
@@ -694,6 +710,154 @@ Format the summary as a clear, organized narrative that I can use to continue th
         console.print(f"[dim]Config file: {get_config_path()}[/dim]")
         return True
 
+    elif cmd == "/turns":
+        rewind_manager = get_rewind_manager()
+        if not rewind_manager:
+            console.print("[yellow]REWIND is not enabled for this session.[/yellow]")
+            console.print("[dim]Enable with rewind.enabled = true in config[/dim]")
+            return True
+
+        if rewind_manager.state.current_turn == 0:
+            console.print("[dim]No turns recorded yet.[/dim]")
+            return True
+
+        console.print("[bold]Conversation Turns:[/bold]\n")
+        for checkpoint in rewind_manager.state.checkpoints:
+            # Format turn info
+            summary = checkpoint.summary or "[No summary]"
+            if len(summary) > 60:
+                summary = summary[:57] + "..."
+
+            current_marker = " [green]← current[/green]" if checkpoint.turn_number == rewind_manager.state.current_turn else ""
+            files_changed = len(checkpoint.file_changes)
+            files_info = f" [dim]({files_changed} file{'s' if files_changed != 1 else ''} changed)[/dim]" if files_changed > 0 else ""
+
+            console.print(f"  [cyan]Turn {checkpoint.turn_number}:[/cyan] {summary}{files_info}{current_marker}")
+
+        # Show modified files summary
+        all_files = set()
+        for checkpoint in rewind_manager.state.checkpoints:
+            for change in checkpoint.file_changes:
+                all_files.add(change.path)
+
+        if all_files:
+            console.print(f"\n[dim]Files modified this session: {', '.join(sorted(all_files)[:5])}")
+            if len(all_files) > 5:
+                console.print(f"  ... and {len(all_files) - 5} more[/dim]")
+            else:
+                console.print("[/dim]", end="")
+
+        console.print("\n[dim]Use /rewind <n> to rewind to turn N[/dim]")
+        return True
+
+    elif cmd == "/rewind":
+        rewind_manager = get_rewind_manager()
+        if not rewind_manager:
+            console.print("[yellow]REWIND is not enabled for this session.[/yellow]")
+            console.print("[dim]Enable with rewind.enabled = true in config[/dim]")
+            return True
+
+        if rewind_manager.state.current_turn == 0:
+            console.print("[dim]No turns to rewind to.[/dim]")
+            return True
+
+        # Handle subcommands
+        if args == "cleanup":
+            # Cleanup rewind state
+            console.print("[bold]Clean up REWIND storage?[/bold]")
+            console.print(f"[dim]This will remove all snapshots for session {rewind_manager.state.session_id}[/dim]")
+            console.print("\n[bold]Continue?[/bold] [dim](yes/no)[/dim]")
+
+            response, _ = console.get_input("> ")
+            if response and response.lower() in ["yes", "y"]:
+                rewind_manager.cleanup()
+                console.print("[green]✓[/green] REWIND storage cleaned up")
+            else:
+                console.print("[dim]Cancelled.[/dim]")
+            return True
+
+        # Parse turn number
+        target_turn = None
+        if args:
+            try:
+                target_turn = int(args)
+            except ValueError:
+                console.print(f"[red]Invalid turn number: {args}[/red]")
+                console.print("[dim]Usage: /rewind <turn_number> or /rewind cleanup[/dim]")
+                return True
+        else:
+            # Interactive mode - show turns and ask
+            console.print("[bold]Rewind to which turn?[/bold]\n")
+            for checkpoint in rewind_manager.state.checkpoints:
+                summary = checkpoint.summary or "[No summary]"
+                if len(summary) > 50:
+                    summary = summary[:47] + "..."
+                current_marker = " [green]← current[/green]" if checkpoint.turn_number == rewind_manager.state.current_turn else ""
+                console.print(f"  [{checkpoint.turn_number}] {summary}{current_marker}")
+
+            console.print(f"\n  [0] Beginning (before any changes)")
+            console.print("\nEnter turn number (or 'cancel'):")
+
+            response, _ = console.get_input("> ")
+            if not response or response.lower() in ["cancel", "c"]:
+                console.print("[dim]Cancelled.[/dim]")
+                return True
+
+            try:
+                target_turn = int(response)
+            except ValueError:
+                console.print("[red]Invalid turn number.[/red]")
+                return True
+
+        # Validate turn number
+        if target_turn < 0 or target_turn > rewind_manager.state.current_turn:
+            console.print(f"[red]Invalid turn number. Valid range: 0-{rewind_manager.state.current_turn}[/red]")
+            return True
+
+        if target_turn == rewind_manager.state.current_turn:
+            console.print("[dim]Already at turn {target_turn}.[/dim]")
+            return True
+
+        # Check for conflicts
+        conflicts = rewind_manager.validate_before_rewind(target_turn)
+        if conflicts:
+            console.print("[yellow]Warning: Some files have been modified outside of loco:[/yellow]")
+            for conflict in conflicts[:5]:
+                console.print(f"  • {conflict.path}")
+            if len(conflicts) > 5:
+                console.print(f"  ... and {len(conflicts) - 5} more")
+
+            console.print("\n[bold]Overwrite these files?[/bold] [dim](yes/no)[/dim]")
+            response, _ = console.get_input("> ")
+            if not response or response.lower() not in ["yes", "y"]:
+                console.print("[dim]Rewind cancelled.[/dim]")
+                return True
+
+        # Perform rewind
+        console.print(f"\n[bold]Rewinding to turn {target_turn}...[/bold]")
+        success, restored_files, _ = rewind_manager.rewind_to_turn(target_turn, force=True)
+
+        if success:
+            for msg in restored_files:
+                console.print(f"  {msg}")
+
+            # Truncate conversation
+            message_index = rewind_manager.get_message_index_for_turn(target_turn)
+            if message_index is not None and message_index < len(conversation.messages):
+                # Keep system message and truncate the rest
+                system_msg = next((m for m in conversation.messages if m.role == "system"), None)
+                conversation.messages = conversation.messages[:message_index]
+                if system_msg and (not conversation.messages or conversation.messages[0].role != "system"):
+                    conversation.messages.insert(0, system_msg)
+
+            console.print(f"\n[green]✓[/green] Rewound to turn {target_turn}")
+            if target_turn == 0:
+                console.print("[dim]All file changes have been undone.[/dim]")
+        else:
+            console.print("[red]Rewind failed.[/red]")
+
+        return True
+
     elif cmd in ("/quit", "/exit", "/q"):
         console.print("[dim]Goodbye![/dim]")
         sys.exit(0)
@@ -831,6 +995,17 @@ def main(ctx: click.Context, model: str | None, cwd: str | None, bash: bool, pro
         config=config,
     )
     conversation.add_system_message(get_default_system_prompt(os.getcwd(), commands_section))
+
+    # Initialize REWIND manager if enabled
+    global _current_session_id
+    if config.rewind.enabled:
+        from loco.history import generate_session_id
+        _current_session_id = generate_session_id()
+        rewind_manager = RewindManager.initialize(
+            session_id=_current_session_id,
+            working_directory=os.getcwd(),
+        )
+        set_rewind_manager(rewind_manager)
 
     # Get tools
     tools = tool_registry.get_openai_tools()
