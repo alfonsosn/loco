@@ -49,26 +49,40 @@ def get_model_context_window(model: str) -> int | None:
     return None
 
 
-def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+def estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    config: Any = None,
+) -> float:
     """Estimate the cost of a completion based on token usage.
 
     Args:
         model: The model identifier
         prompt_tokens: Number of input/prompt tokens
         completion_tokens: Number of output/completion tokens
+        config: Optional Config object to check for custom model costs
 
     Returns:
         Estimated cost in USD
     """
-    # Find matching cost entry
     input_cost, output_cost = None, None
 
-    for model_prefix, costs in MODEL_COSTS.items():
-        if model_prefix in model.lower():
-            input_cost, output_cost = costs
-            break
+    # First, check config for custom model costs
+    if config is not None:
+        from loco.config import get_model_cost
+        custom_cost = get_model_cost(model, config)
+        if custom_cost is not None:
+            input_cost, output_cost = custom_cost
 
-    # If no match found, use a conservative estimate
+    # Fall back to built-in MODEL_COSTS
+    if input_cost is None:
+        for model_prefix, costs in MODEL_COSTS.items():
+            if model_prefix in model.lower():
+                input_cost, output_cost = costs
+                break
+
+    # If still no match, use a conservative estimate
     if input_cost is None:
         input_cost, output_cost = 5.00, 15.00
 
@@ -125,22 +139,28 @@ class UsageStats:
     timestamp: datetime = field(default_factory=datetime.now)
     
     @classmethod
-    def from_response(cls, model: str, usage_data: dict[str, Any]) -> "UsageStats":
+    def from_response(
+        cls,
+        model: str,
+        usage_data: dict[str, Any],
+        config: Any = None,
+    ) -> "UsageStats":
         """Create UsageStats from LiteLLM response usage data.
-        
+
         Args:
             model: The model identifier
             usage_data: The usage dict from response (with prompt_tokens, completion_tokens, etc.)
-            
+            config: Optional Config object for custom model costs
+
         Returns:
             UsageStats object
         """
         prompt_tokens = usage_data.get("prompt_tokens", 0)
         completion_tokens = usage_data.get("completion_tokens", 0)
         total_tokens = usage_data.get("total_tokens", prompt_tokens + completion_tokens)
-        
-        cost = estimate_cost(model, prompt_tokens, completion_tokens)
-        
+
+        cost = estimate_cost(model, prompt_tokens, completion_tokens, config)
+
         return cls(
             model=model,
             prompt_tokens=prompt_tokens,
